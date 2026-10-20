@@ -180,6 +180,9 @@ int d3d_hook(int fn)
             s_in_fn = -1;
             return 1;
         }
+        const char *ren = getenv("NGB_RENDERER");
+        if (ren && !strcmp(ren, "xemu"))
+            s_hle = 0;
     }
     if (s_trace < 0) {
         const char *e = getenv("NGB_D3D_TRACE");

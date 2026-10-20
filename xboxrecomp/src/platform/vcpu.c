@@ -562,6 +562,7 @@ int vcpu_get_priority(vcpu_thread *t)
  * Anywhere else the flag stays set for compat_host_leave, as on POSIX. */
 void vcpu_win_trampoline(void);
 void vcpu_win_preempt_point(void);
+#if defined(__x86_64__) || defined(_M_X64)
 __asm__(
     ".text\n"
     ".globl vcpu_win_trampoline\n"
@@ -595,6 +596,68 @@ __asm__(
     "    ret\n"
     ".globl vcpu_win_trampoline_end\n"
     "vcpu_win_trampoline_end:\n");
+#elif defined(__aarch64__) || defined(_M_ARM64)
+__asm__(
+    ".text\n"
+    ".p2align 2\n"
+    ".globl vcpu_win_trampoline\n"
+    "vcpu_win_trampoline:\n"
+    "    sub sp, sp, #0x390\n"
+    "    stp x0, x1, [sp, #0x08]\n"
+    "    stp x2, x3, [sp, #0x18]\n"
+    "    stp x4, x5, [sp, #0x28]\n"
+    "    stp x6, x7, [sp, #0x38]\n"
+    "    stp x8, x9, [sp, #0x48]\n"
+    "    stp x10, x11, [sp, #0x58]\n"
+    "    stp x12, x13, [sp, #0x68]\n"
+    "    stp x14, x15, [sp, #0x78]\n"
+    "    stp x16, x17, [sp, #0x88]\n"
+    "    stp x18, x19, [sp, #0x98]\n"
+    "    stp x20, x21, [sp, #0xa8]\n"
+    "    stp x22, x23, [sp, #0xb8]\n"
+    "    stp x24, x25, [sp, #0xc8]\n"
+    "    stp x26, x27, [sp, #0xd8]\n"
+    "    str x28, [sp, #0xe8]\n"
+    "    str x29, [sp, #0xf0]\n"
+    "    ldr x9, [sp, #0x398]\n"       /* c.Lr saved by redirect() */
+    "    str x9, [sp, #0xf8]\n"       /* CONTEXT.Lr */
+    "    add x9, sp, #0x3a0\n"        /* original Sp before redirect() */
+    "    str x9, [sp, #0x100]\n"      /* CONTEXT.Sp */
+    "    ldr x9, [sp, #0x390]\n"      /* c.Pc saved by redirect() */
+    "    str x9, [sp, #0x108]\n"      /* CONTEXT.Pc */
+    "    mov w9, #0x0007\n"
+    "    movk w9, #0x0040, lsl #16\n" /* CONTEXT_FULL (0x00400007) */
+    "    str w9, [sp, #0x00]\n"
+    "    mrs x9, nzcv\n"
+    "    str w9, [sp, #0x04]\n"       /* CONTEXT.Cpsr */
+    "    stp q0, q1, [sp, #0x110]\n"
+    "    stp q2, q3, [sp, #0x130]\n"
+    "    stp q4, q5, [sp, #0x150]\n"
+    "    stp q6, q7, [sp, #0x170]\n"
+    "    stp q8, q9, [sp, #0x190]\n"
+    "    stp q10, q11, [sp, #0x1b0]\n"
+    "    stp q12, q13, [sp, #0x1d0]\n"
+    "    stp q14, q15, [sp, #0x1f0]\n"
+    "    stp q16, q17, [sp, #0x210]\n"
+    "    stp q18, q19, [sp, #0x230]\n"
+    "    stp q20, q21, [sp, #0x250]\n"
+    "    stp q22, q23, [sp, #0x270]\n"
+    "    stp q24, q25, [sp, #0x290]\n"
+    "    stp q26, q27, [sp, #0x2b0]\n"
+    "    stp q28, q29, [sp, #0x2d0]\n"
+    "    stp q30, q31, [sp, #0x2f0]\n"
+    "    mrs x9, fpcr\n"
+    "    str w9, [sp, #0x310]\n"
+    "    mrs x9, fpsr\n"
+    "    str w9, [sp, #0x314]\n"
+    "    bl vcpu_win_preempt_point\n"
+    "    mov x0, sp\n"
+    "    mov x1, #0\n"
+    "    bl RtlRestoreContext\n"
+    "    brk #1\n"
+    ".globl vcpu_win_trampoline_end\n"
+    "vcpu_win_trampoline_end:\n");
+#endif
 extern char vcpu_win_trampoline_end[];
 
 void vcpu_win_preempt_point(void)
@@ -658,6 +721,27 @@ static int redirect(vcpu_thread *t)
         return 0;
     memset(&c, 0, sizeof c);
     c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+#if defined(__aarch64__) || defined(_M_ARM64)
+    if (!GetThreadContext(t->host, &c) || !in_image(c.Pc))
+        return 0;
+    if (t->redirected) {
+        if (c.Pc >= (DWORD64)vcpu_win_trampoline && c.Pc < (DWORD64)vcpu_win_trampoline_end)
+            return 0;
+        t->redirected = 0;
+    }
+    if (!VirtualQuery((LPCVOID)(c.Sp - 16), &mbi, sizeof mbi) || mbi.State != MEM_COMMIT ||
+        (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS)))
+        return 0;
+    c.Sp -= 16;
+    *(DWORD64 *)c.Sp = c.Pc;
+    *(DWORD64 *)(c.Sp + 8) = c.Lr;
+    c.Pc = (DWORD64)vcpu_win_trampoline;
+    c.ContextFlags = CONTEXT_CONTROL;
+    if (!SetThreadContext(t->host, &c))
+        return 0;
+    t->redirected = 1;
+    return 1;
+#else
     if (!GetThreadContext(t->host, &c) || !in_image(c.Rip))
         return 0;
     if (t->redirected) {
@@ -681,6 +765,7 @@ static int redirect(vcpu_thread *t)
         return 0;
     t->redirected = 1;
     return 1;
+#endif
 }
 
 /* After a handler has dealt with an exception: preemption may come again. */
@@ -705,6 +790,27 @@ int vcpu_win_unredirect(void *exception_pointers)
      * handlers run in signal handlers, where the preemption signal waits. */
     if (t_self)
         t_self->in_exception = now_ms() | 1;
+#if defined(__aarch64__) || defined(_M_ARM64)
+    if (c->Pc != (DWORD64)vcpu_win_trampoline) {
+        if (t_self)
+            t_self->redirected = 0;
+        return 0;
+    }
+    back = *(DWORD64 *)c->Sp;
+    if (!in_image(back))
+        return 0;
+    if (er->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && er->NumberParameters >= 2 &&
+        er->ExceptionInformation[1] >= c->Sp - 912 && er->ExceptionInformation[1] < c->Sp + 16)
+        return 0;
+    c->Pc = back;
+    c->Lr = *(DWORD64 *)(c->Sp + 8);
+    c->Sp += 16;
+    if ((DWORD64)er->ExceptionAddress == (DWORD64)vcpu_win_trampoline)
+        er->ExceptionAddress = (PVOID)back;
+    if (t_self)
+        t_self->redirected = 0;
+    return 1;
+#else
     if (c->Rip != (DWORD64)vcpu_win_trampoline) {
         /* A redirect still pending, but not in the context this exception resumes: Windows
          * dropped it. The thread was suspended after the kernel had captured the fault's
@@ -733,6 +839,7 @@ int vcpu_win_unredirect(void *exception_pointers)
     if (t_self)
         t_self->redirected = 0;
     return 1;
+#endif
 }
 
 /* Caller holds s_lock. */

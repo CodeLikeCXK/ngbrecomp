@@ -16,11 +16,28 @@ iso=${1:-$here/disc/ngb.xiso}
 files=$here/game_files
 xbe=$files/default.xbe
 
-if [ ! -x "$toolkit/.venv/bin/python" ]; then
-    python3 -m venv "$toolkit/.venv"
-    "$toolkit/.venv/bin/pip" -q install capstone
+if [ -d "$toolkit/.venv/Scripts" ]; then
+    py="$toolkit/.venv/Scripts/python"
+    pip="$toolkit/.venv/Scripts/pip"
+else
+    py="$toolkit/.venv/bin/python"
+    pip="$toolkit/.venv/bin/pip"
 fi
-py=$toolkit/.venv/bin/python
+
+if [ ! -x "$py" ] && [ ! -x "${py}.exe" ]; then
+    python3 -m venv "$toolkit/.venv" 2>/dev/null || python -m venv "$toolkit/.venv"
+    if [ -d "$toolkit/.venv/Scripts" ]; then
+        py="$toolkit/.venv/Scripts/python"
+        pip="$toolkit/.venv/Scripts/pip"
+    else
+        py="$toolkit/.venv/bin/python"
+        pip="$toolkit/.venv/bin/pip"
+    fi
+fi
+
+if ! "$py" -c "import capstone" >/dev/null 2>&1; then
+    "$pip" -q install capstone
+fi
 cd "$toolkit"
 
 if [ ! -f "$xbe" ]; then

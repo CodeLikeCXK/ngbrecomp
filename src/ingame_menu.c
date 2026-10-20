@@ -1695,10 +1695,10 @@ _Noreturn void ngb_renderer_fatal(const char *detail)
 {
     char msg[1024];
     snprintf(msg, sizeof msg,
-             "Ninja Gaiden Black needs a GPU and driver with Vulkan 1.3 (dynamic rendering and push "
+             "Ninja Gaiden Black Direct3D renderer needs a GPU and driver with Vulkan 1.3 (dynamic rendering and push "
              "descriptors), and this system does not offer it:\n\n%s\n\n"
-             "Please update your graphics driver. GPUs from before about 2016 (for example Nvidia's "
-             "GTX 600 and 700 series) are not supported.", detail);
+             "You can set environment variable NGB_RENDERER=xemu to run with the hardware-accurate NV2A renderer "
+             "which supports Vulkan 1.1+.", detail);
     fprintf(stderr, "[D3D] %s\n", msg);
     fflush(stderr);
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Ninja Gaiden Black", msg, NULL);

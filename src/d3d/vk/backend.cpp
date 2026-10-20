@@ -722,9 +722,19 @@ bool VulkanBackend::Init(uint32_t, uint32_t) {
             // vertical blanks come from it) but no longer draws; NGB_D3D_KEEP_NV2A=1 keeps it
             // drawing (unseen) for comparisons
             if (!std::getenv("NGB_D3D_KEEP_NV2A")) nv2a_vk_set_draws_off(true);
+        } else if (st == 1) {
+            std::fprintf(stderr,
+                         "[D3D] GPU does not support Vulkan 1.3 dynamic rendering or push descriptors.\n"
+                         "[D3D] Seamlessly falling back to xemu NV2A hardware renderer (Vulkan 1.1+ compatible).\n");
+#if defined(_WIN32)
+            _putenv_s("NGB_RENDERER", "xemu");
+#else
+            setenv("NGB_RENDERER", "xemu", 1);
+#endif
+            nv2a_vk_set_draws_off(false);
+            return false;
         } else {
-            ngb_renderer_fatal(st == 1 ? "The GPU's Vulkan driver has no Vulkan 1.3 dynamic rendering or push descriptors."
-                                       : "No Vulkan device could be used.");
+            ngb_renderer_fatal("No Vulkan device could be used.");
         }
     }
     if (!shared_ && (!CreateInstance() || !CreateDevice())) return false;

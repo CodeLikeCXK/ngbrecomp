@@ -56,7 +56,13 @@ static void apu_wr(void *dev, uint32_t off, uint64_t val, int size)
 
 static bool apu_decode_and_handle(PCONTEXT ctx, uint32_t mmio_offset, int is_write)
 {
+#if defined(__aarch64__) || defined(_M_ARM64)
+    const uint8_t *ip = (const uint8_t *)ctx->Pc;
+    void *cur_ip = (void *)(uintptr_t)ctx->Pc;
+#else
     const uint8_t *ip = (const uint8_t *)ctx->Rip;
+    void *cur_ip = (void *)(uintptr_t)ctx->Rip;
+#endif
 
     (void)is_write;
     if (!g_apu_state)
@@ -66,8 +72,8 @@ static bool apu_decode_and_handle(PCONTEXT ctx, uint32_t mmio_offset, int is_wri
 
     g_apu_mmio_decode_fail++;
     if (g_apu_mmio_decode_fail <= 20) {
-        fprintf(stderr, "[APU] MMIO decode fail at RIP=%p offset=0x%X: %02X %02X %02X %02X %02X %02X\n",
-                (void*)ctx->Rip, mmio_offset, ip[0], ip[1], ip[2], ip[3], ip[4], ip[5]);
+        fprintf(stderr, "[APU] MMIO decode fail at PC/RIP=%p offset=0x%X: %02X %02X %02X %02X %02X %02X\n",
+                cur_ip, mmio_offset, ip[0], ip[1], ip[2], ip[3], ip[4], ip[5]);
         fflush(stderr);
     }
     return false;

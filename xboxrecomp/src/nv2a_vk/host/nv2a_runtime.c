@@ -116,7 +116,11 @@ static LONG CALLBACK nv2a_veh(PEXCEPTION_POINTERS ep)
     if (mmio_emulate(ep->ContextRecord, off, NULL, rd, wr))
         return EXCEPTION_CONTINUE_EXECUTION;
     if (s_decode_fail++ < 20) {
+#if defined(__aarch64__) || defined(_M_ARM64)
+        const uint8_t *ip = (const uint8_t *)ep->ContextRecord->Pc;
+#else
         const uint8_t *ip = (const uint8_t *)ep->ContextRecord->Rip;
+#endif
         fprintf(stderr, "[NV2A] undecoded register access at +0x%06X: "
                         "%02X %02X %02X %02X %02X %02X\n", off,
                 ip[0], ip[1], ip[2], ip[3], ip[4], ip[5]);

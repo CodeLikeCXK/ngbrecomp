@@ -439,7 +439,7 @@ static void ac97_clear_reset_bits(void)
     }
 }
 
-#if defined(__APPLE__) && defined(__aarch64__)
+#if defined(__aarch64__) || defined(_M_ARM64)
 #include "../platform/mmio_decode.h"
 static uint64_t ac97_mac_rd(void *d, uint32_t off, int size)
 {
@@ -463,6 +463,7 @@ static LONG CALLBACK ac97_write_veh(PEXCEPTION_POINTERS ep)
     if (!g_ac97_page)
         return EXCEPTION_CONTINUE_SEARCH;
 
+#if !defined(__aarch64__) && !defined(_M_ARM64)
     /* Second half: the faulting write has now executed. Apply what the
      * controller would have done and close the page again. Thread-local,
      * because another thread must not mistake its own single-step for this
@@ -475,6 +476,7 @@ static LONG CALLBACK ac97_write_veh(PEXCEPTION_POINTERS ep)
         ep->ContextRecord->EFlags &= ~0x100u;   /* clear TF */
         return EXCEPTION_CONTINUE_EXECUTION;
     }
+#endif
 
     if (code == EXCEPTION_ACCESS_VIOLATION
             && ep->ExceptionRecord->ExceptionInformation[0] == 1) {
@@ -485,7 +487,7 @@ static LONG CALLBACK ac97_write_veh(PEXCEPTION_POINTERS ep)
             if (!VirtualProtect(g_ac97_page, AC97_TRAP_BYTES,
                                 PAGE_READWRITE, &old))
                 return EXCEPTION_CONTINUE_SEARCH;
-#if defined(__APPLE__) && defined(__aarch64__)
+#if defined(__aarch64__) || defined(_M_ARM64)
             int ok = mmio_emulate(ep->ContextRecord, (uint32_t)(fault - (uintptr_t)g_ac97_page),
                                   g_ac97_page, ac97_mac_rd, ac97_mac_wr);
             ac97_clear_reset_bits();
@@ -1531,6 +1533,7 @@ static LONG CALLBACK watch_veh(PEXCEPTION_POINTERS ep)
     if (!g_watch_page)
         return EXCEPTION_CONTINUE_SEARCH;
 
+#if !defined(__aarch64__) && !defined(_M_ARM64)
     if (code == EXCEPTION_SINGLE_STEP && s_watch_stepping) {
         s_watch_stepping = 0;
         watch_report();
@@ -1552,6 +1555,7 @@ static LONG CALLBACK watch_veh(PEXCEPTION_POINTERS ep)
             return EXCEPTION_CONTINUE_EXECUTION;
         }
     }
+#endif
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -2383,13 +2387,18 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
                 MEM32_INIT(FAKE_TLS_BLOCK_VA, FAKE_TLS_THREAD_VA);
                 MEM32_INIT(XBOX_FS_BASE + 0x04, FAKE_TLS_BLOCK_VA + total);
 
+                uint32_t index_va = tls[2];
+                if (index_va >= XBOX_BASE_ADDRESS && index_va < XBOX_TOTAL_RAM) {
+                    MEM32_INIT(index_va, -(int)(total / 4));
+                }
+
                 g_tls_template_va = FAKE_TLS_BLOCK_VA;
                 g_tls_total       = total;
 
                 fprintf(stderr, "  TLS: %u-byte block at 0x%08X,"
-                        " fs:[4] = 0x%08X (index will be %d)\n",
+                        " fs:[4] = 0x%08X (index %d written to 0x%08X)\n",
                         total, FAKE_TLS_BLOCK_VA, FAKE_TLS_BLOCK_VA + total,
-                        -(int)(total / 4));
+                        -(int)(total / 4), index_va);
             }
         }
         #undef FAKE_TLS_BLOCK_VA

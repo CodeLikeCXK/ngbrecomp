@@ -6,8 +6,22 @@ if(NOT EXISTS ${TP}/volk/volk.c)
     message(FATAL_ERROR "nv2a_vk: run third_party/fetch.sh first")
 endif()
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(NV2A_GLIB REQUIRED IMPORTED_TARGET glib-2.0)
+find_package(PkgConfig QUIET)
+if(PKG_CONFIG_FOUND)
+    pkg_check_modules(NV2A_GLIB REQUIRED IMPORTED_TARGET glib-2.0)
+    set(NV2A_GLIB_TARGET PkgConfig::NV2A_GLIB)
+else()
+    find_library(GLIB_LIB NAMES glib-2.0 libglib-2.0 REQUIRED)
+    find_path(GLIB_INCLUDE_DIR glib.h PATH_SUFFIXES glib-2.0 REQUIRED)
+    find_path(GLIBCONFIG_INCLUDE_DIR glibconfig.h
+              HINTS ${CMAKE_PREFIX_PATH}
+              PATH_SUFFIXES lib/glib-2.0/include glib-2.0/include
+              REQUIRED)
+    add_library(nv2a_glib_imported INTERFACE)
+    target_link_libraries(nv2a_glib_imported INTERFACE ${GLIB_LIB})
+    target_include_directories(nv2a_glib_imported INTERFACE ${GLIB_INCLUDE_DIR} ${GLIBCONFIG_INCLUDE_DIR})
+    set(NV2A_GLIB_TARGET nv2a_glib_imported)
+endif()
 find_package(SDL2 REQUIRED)
 # glslang's C interface. Its CMake package when there is one: a static
 # glslang is several archives (MachineIndependent, GenericCodeGen, ...) that
@@ -74,7 +88,7 @@ target_compile_options(xbox_nv2a_vk PRIVATE
     -Wno-missing-field-initializers -Wno-unused-function)
 target_link_libraries(xbox_nv2a_vk PUBLIC
     xbox_kernel xbox_video platform
-    PkgConfig::NV2A_GLIB SDL2::SDL2
+    ${NV2A_GLIB_TARGET} SDL2::SDL2
     ${NV2A_GLSLANG}
     $<IF:$<PLATFORM_ID:Windows>,winpthread,${CMAKE_DL_LIBS} m pthread>
     $<$<PLATFORM_ID:Windows>:dxgi dxguid>)   # dxgi: the display's vertical blank (nv2a_host.c)   # libstdc++: the C++ link brings it (statically under -static-libstdc++)

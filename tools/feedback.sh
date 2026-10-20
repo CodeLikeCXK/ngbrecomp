@@ -24,8 +24,10 @@ echo "== running for ${secs}s"
       > "$runs/feedback.log" 2>&1 ) || true
 grep -c "Failed to resolve" "$runs/feedback.log" | sed 's/^/   unresolved ICALL reports: /'
 
+py=.venv/bin/python
+[ -d .venv/Scripts ] && py=.venv/Scripts/python
 echo "== merge"
-( cd "$toolkit" && .venv/bin/python -m tools.recomp.icall_feedback --db "$here/src/icall_targets.json" merge "$runs/icall_targets.dump" )
+( cd "$toolkit" && "$py" -m tools.recomp.icall_feedback --db "$here/src/icall_targets.json" merge "$runs/icall_targets.dump" )
 
 "$here/tools/pipeline.sh"
 echo "== build"

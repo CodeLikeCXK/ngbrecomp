@@ -553,6 +553,12 @@ void Start() {
             g_started = false;
             return;
         }
+        const char *ren = std::getenv("NGB_RENDERER");
+        if (ren && std::strcmp(ren, "xemu") == 0) {
+            std::fprintf(stderr, "[D3D] Switched to xemu NV2A hardware renderer.\n");
+            g_mirror = true;
+            return;
+        }
         std::fprintf(stderr, "[D3D] renderer init failed\n");
         if (!g_mirror) ngb_renderer_fatal("The renderer could not start on this GPU (details above in the log).");
     }

@@ -1416,7 +1416,11 @@ int xbox_OhciHandleMmio(void *ctx, uint32_t xbox_va)
     ok = mmio_emulate((PCONTEXT)ctx, xbox_va - hc->base, hc,
                       ohci_read, ohci_write);
     if (!ok && hc->decode_fail++ < 20) {
+#if defined(__aarch64__) || defined(_M_ARM64)
+        const uint8_t *ip = (const uint8_t *)((PCONTEXT)ctx)->Pc;
+#else
         const uint8_t *ip = (const uint8_t *)((PCONTEXT)ctx)->Rip;
+#endif
         fprintf(stderr, "  [OHCI%d] undecoded access at +0x%03X: "
                         "%02X %02X %02X %02X %02X %02X\n",
                 hc->index, xbox_va - hc->base,

@@ -26,10 +26,22 @@
 
 #include <stdint.h>
 
-#if defined(__aarch64__) && !defined(_WIN32)
+#if defined(__aarch64__) || defined(_M_ARM64)
 
-#if defined(__APPLE__)
+#if defined(_WIN32)
+#include <windows.h>
+typedef CONTEXT a64_context_t;
+#define A64_CTX_PC(uc)   ((uc)->Pc)
+#define A64_CTX_X(uc, n) ((uc)->X[(n)])
+#define A64_CTX_FP(uc)   ((uc)->Fp)
+#define A64_CTX_LR(uc)   ((uc)->Lr)
+#define A64_CTX_SP(uc)   ((uc)->Sp)
+#define A64_CTX_HAS_V 1
+#define A64_CTX_V_OK(uc) 1
+#define A64_CTX_V(uc, n) (*(__uint128_t *)&((uc)->V[(n)]))
+#elif defined(__APPLE__)
 #include <sys/ucontext.h>
+typedef ucontext_t a64_context_t;
 #if defined(__DARWIN_OPAQUE_ARM_THREAD_STATE64) && __DARWIN_OPAQUE_ARM_THREAD_STATE64
 /* arm64e: pc/lr/sp/fp are ptrauth-signed opaque fields; use the
  * __darwin_arm_thread_state64_{get,set}_* accessors there. This runtime is
@@ -45,6 +57,7 @@
 #define A64_CTX_V(uc, n) ((uc)->uc_mcontext->__ns.__v[(n)])
 #elif defined(__linux__)
 #include <ucontext.h>
+typedef ucontext_t a64_context_t;
 #include <asm/sigcontext.h>      /* struct _aarch64_ctx, fpsimd_context */
 #define A64_CTX_PC(uc)   ((uc)->uc_mcontext.pc)
 #define A64_CTX_X(uc, n) ((uc)->uc_mcontext.regs[(n)])
@@ -85,7 +98,7 @@ typedef uint64_t (*mmio_a64_read_fn)(void *dev, uint32_t off, int size);
 typedef void     (*mmio_a64_write_fn)(void *dev, uint32_t off, uint64_t val, int size);
 
 /* x0..x28, then fp (x29), lr (x30); 31 is SP when used as a base. */
-static inline uint64_t *mmio_a64_xreg(ucontext_t *uc, int r)
+static inline uint64_t *mmio_a64_xreg(a64_context_t *uc, int r)
 {
     if (r < 29) return (uint64_t *)&A64_CTX_X(uc, r);
     if (r == 29) return (uint64_t *)&A64_CTX_FP(uc);
@@ -95,7 +108,7 @@ static inline uint64_t *mmio_a64_xreg(ucontext_t *uc, int r)
 
 /* 1 if the instruction at pc was serviced against (rd, wr) and pc advanced.
  * off is the device offset of the faulting data address (from si_addr). */
-static inline int mmio_emulate_a64(ucontext_t *uc, uint32_t off, void *dev,
+static inline int mmio_emulate_a64(a64_context_t *uc, uint32_t off, void *dev,
                                    mmio_a64_read_fn rd, mmio_a64_write_fn wr)
 {
     uint32_t insn = *(const uint32_t *)(uintptr_t)A64_CTX_PC(uc);
@@ -247,5 +260,5 @@ static inline int mmio_emulate_a64(ucontext_t *uc, uint32_t off, void *dev,
     return 0;
 }
 
-#endif /* __aarch64__ && !_WIN32 */
+#endif /* __aarch64__ || _M_ARM64 */
 #endif /* MMIO_DECODE_A64_H */

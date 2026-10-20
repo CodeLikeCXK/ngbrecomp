@@ -293,6 +293,7 @@ static void watch_arm(void)
 
 static LONG watch_exception(PEXCEPTION_POINTERS ep, uint32_t xbox_va, int is_write)
 {
+#if !defined(__aarch64__) && !defined(_M_ARM64)
     if (ep->ExceptionRecord->ExceptionCode == EXCEPTION_SINGLE_STEP) {
         if (!t_watch_stepping)
             return EXCEPTION_CONTINUE_SEARCH;
@@ -301,6 +302,7 @@ static LONG watch_exception(PEXCEPTION_POINTERS ep, uint32_t xbox_va, int is_wri
         watch_protect(1);
         return EXCEPTION_CONTINUE_EXECUTION;
     }
+#endif
     if (!s_watch_len || !is_write || (xbox_va & ~0xFFFu) != s_watch_page)
         return EXCEPTION_CONTINUE_SEARCH;
     static long long after = -1, t0;
@@ -311,7 +313,11 @@ static LONG watch_exception(PEXCEPTION_POINTERS ep, uint32_t xbox_va, int is_wri
     }
     if (xbox_va + 8 > s_watch_va && xbox_va < s_watch_va + s_watch_len &&
         (long long)GetTickCount64() - t0 >= after && s_watch_hits++ < 400) {
+#if defined(__aarch64__) || defined(_M_ARM64)
+        void *rip = (void *)(uintptr_t)ep->ContextRecord->Pc;
+#else
         void *rip = (void *)(uintptr_t)ep->ContextRecord->Rip;
+#endif
 #if defined(_WIN32)
         const char *who = "?";
 #else
@@ -329,10 +335,14 @@ static LONG watch_exception(PEXCEPTION_POINTERS ep, uint32_t xbox_va, int is_wri
         }
 #endif
     }
+#if !defined(__aarch64__) && !defined(_M_ARM64)
     watch_protect(0);
     t_watch_stepping = 1;
     ep->ContextRecord->EFlags |= 0x100u;
     return EXCEPTION_CONTINUE_EXECUTION;
+#else
+    return EXCEPTION_CONTINUE_SEARCH;
+#endif
 }
 
 static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep)
@@ -367,15 +377,20 @@ static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep)
         xbox_OhciHandleMmio(ep->ContextRecord, xbox_va))
         return EXCEPTION_CONTINUE_EXECUTION;
 
-    fprintf(stderr, "[CRASH] Access violation at RIP=0x%llX, fault addr=0x%llX (%s)\n",
-            (unsigned long long)ep->ContextRecord->Rip,
+#if defined(__aarch64__) || defined(_M_ARM64)
+    uint64_t cur_pc = (uint64_t)ep->ContextRecord->Pc;
+#else
+    uint64_t cur_pc = (uint64_t)ep->ContextRecord->Rip;
+#endif
+    fprintf(stderr, "[CRASH] Access violation at PC/RIP=0x%llX, fault addr=0x%llX (%s)\n",
+            (unsigned long long)cur_pc,
             (unsigned long long)fault_addr, is_write ? "write" : "read");
     fprintf(stderr, "  Xbox VA of fault: 0x%08X\n", xbox_va);
     fprintf(stderr, "  Xbox regs: eax=%08X ecx=%08X edx=%08X ebx=%08X\n",
             g_eax, g_ecx, g_edx, g_ebx);
     fprintf(stderr, "             esi=%08X edi=%08X esp=%08X\n",
             g_esi, g_edi, g_esp);
-    print_host_symbol((void *)(uintptr_t)ep->ContextRecord->Rip);
+    print_host_symbol((void *)(uintptr_t)cur_pc);
     print_guest_stack();
     fflush(stderr);
     return EXCEPTION_CONTINUE_SEARCH;
@@ -877,6 +892,29 @@ static DWORD WINAPI hang_dump_thread(LPVOID arg)
         c.ContextFlags = CONTEXT_FULL;
         if ((GetThreadContext)(h, &c)) {
             len += snprintf(out + len, sizeof out - len, "[HANG] thread %lu:", te.th32ThreadID);
+#if defined(_M_ARM64) || defined(__aarch64__)
+            for (int f = 0; f < 20 && c.Pc; f++) {
+                DWORD64 base = 0;
+                PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(c.Pc, &base, NULL);
+                int m = -1;
+                for (int i = 0; i < nmods; i++)
+                    if (c.Pc >= (DWORD64)mi[i].lpBaseOfDll &&
+                        c.Pc < (DWORD64)mi[i].lpBaseOfDll + mi[i].SizeOfImage)
+                        m = i;
+                if (m >= 0)
+                    len += snprintf(out + len, sizeof out - len, " %s+%llx", names[m],
+                                    (unsigned long long)(c.Pc - (DWORD64)mi[m].lpBaseOfDll));
+                else
+                    len += snprintf(out + len, sizeof out - len, " %llx", (unsigned long long)c.Pc);
+                if (fn) {
+                    PVOID hd;
+                    DWORD64 ef;
+                    RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, c.Pc, fn, &c, &hd, &ef, NULL);
+                } else {
+                    c.Pc = c.Lr;
+                }
+            }
+#else
             for (int f = 0; f < 20 && c.Rip; f++) {
                 DWORD64 base = 0;
                 PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(c.Rip, &base, NULL);
@@ -899,6 +937,7 @@ static DWORD WINAPI hang_dump_thread(LPVOID arg)
                     c.Rsp += 8;
                 }
             }
+#endif
             len += snprintf(out + len, sizeof out - len, "\n");
         }
         (ResumeThread)(h);
@@ -1021,28 +1060,27 @@ int main(int argc, char **argv)
      * virtual CPU's time slices, the kernel's timers and the frame pacing
      * all sleep briefly. */
     timeBeginPeriod(1);
-    /* A GUI program, so no console window opens; started from one, its
-     * output goes there, else to log.txt in the save folder. */
-    if (AttachConsole(ATTACH_PARENT_PROCESS)) {
-        freopen("CONOUT$", "w", stdout);
-        freopen("CONOUT$", "w", stderr);
+    const char *log_env = getenv("NGB_LOG_FILE");
+    char log[4096];
+    if (log_env && *log_env) {
+        snprintf(log, sizeof log, "%s", log_env);
     } else {
-        char log[4096];
         save_dir_path(log, sizeof log - 8);
         ngb_mkdir(log);
         strcat(log, "/log.txt");
-        FILE *f = fopen(log, "w");      /* emptied, then both append */
-        if (f) {
-            fclose(f);
-            freopen(log, "a", stdout);
-            freopen(log, "a", stderr);
-        }
     }
+    freopen(log, "w", stdout);
+    freopen(log, "w", stderr);
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
     if (getenv("NGB_MEM_TRACE"))
         CloseHandle(CreateThread(NULL, 0, mem_trace_thread, NULL, 0, NULL));
     if (getenv("NGB_HANG_DUMP"))
         CloseHandle(CreateThread(NULL, 0, hang_dump_thread,
                                  (LPVOID)(uintptr_t)atoi(getenv("NGB_HANG_DUMP")), 0, NULL));
+    if (!getenv("VK_ICD_FILENAMES") && access("C:/qcvk/qcvk_icd_arm64x.json", 0) == 0) {
+        putenv("VK_ICD_FILENAMES=C:\\qcvk\\qcvk_icd_arm64x.json");
+    }
 #else
     /* NGB_PTRACE_ANY=1: let any process of this user attach a debugger
      * (Yama's ptrace_scope 1 allows only ancestors), for stack dumps. */

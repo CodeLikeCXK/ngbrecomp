@@ -103,7 +103,7 @@ static inline void dirty_lock(void)
 {
     while (__atomic_exchange_n(&s_lock, 1, __ATOMIC_ACQUIRE))
         while (__atomic_load_n(&s_lock, __ATOMIC_RELAXED))
-#if defined(__aarch64__)
+#if defined(__aarch64__) || defined(_M_ARM64)
             __asm__ volatile("yield");
 #else
             __builtin_ia32_pause();

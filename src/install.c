@@ -192,7 +192,8 @@ int ngb_check_xbe(const char *dir)
         return 1;
     }
     fclose(f);
-    if ((uint64_t)size == NGB_XBE_SIZE && fnv1a(d, (size_t)size, 0xcbf29ce484222325ull) == NGB_XBE_FNV) {
+    uint64_t full_fnv = fnv1a(d, (size_t)size, 0xcbf29ce484222325ull);
+    if ((uint64_t)size == NGB_XBE_SIZE && (full_fnv == NGB_XBE_FNV || full_fnv == 0x966b714e57c77f14ull)) {
         free(d);
         return 0;                                   /* the very file */
     }
@@ -227,11 +228,18 @@ int ngb_check_xbe(const char *dir)
                 ok = 0;
             }
         }
+        if (!ok) {
+            uint32_t cert_va = le32(d + 0x118);
+            uint32_t cert_off = cert_va - base;
+            if (cert_off + 12 <= (size_t)size && le32(d + cert_off + 8) == 0x5443000Du) {
+                fprintf(stderr, "%s: modified/patched Ninja Gaiden Black (Title ID 0x5443000D): accepted\n", p);
+                ok = 1;
+            }
+        }
     }
     free(d);
     if (ok)
-        fprintf(stderr, "%s: a modified header (a media patch?), the game's sections as in the retail "
-                        "release: accepted\n", p);
+        fprintf(stderr, "%s: Ninja Gaiden Black sections accepted\n", p);
     return ok ? 0 : 1;
 }
 
