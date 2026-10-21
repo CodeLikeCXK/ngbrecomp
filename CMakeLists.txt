@@ -108,6 +108,7 @@ add_library(ngb_gen OBJECT ${RECOMP_GEN_SOURCES}
     ${CMAKE_CURRENT_SOURCE_DIR}/src/menu_mouse.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/menu_font.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/fps_text.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/autosave.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/playtime.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/main_menu.c
     # The Direct3D hooks (docs/renderer.md, tools/take_d3d.py).

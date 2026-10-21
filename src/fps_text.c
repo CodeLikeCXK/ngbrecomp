@@ -36,6 +36,9 @@ static uint32_t mix(uint32_t bg, uint32_t fg, unsigned a)
 static bool fps_rasterize(const char *text, uint32_t line_px, uint32_t *px, uint32_t maxw, uint32_t maxh,
                           uint32_t *ow, uint32_t *oh);
 
+extern bool ngb_autosave_banner_active(void);
+extern int ngb_pc_setting(int which);
+
 /* Called at every present, for each frame's buffer; the text changes twice a second. Rasterized once and
  * copied after: drawing it every frame was 9% of the game thread's time with the counter on. */
 bool nv2a_fps_render(const char *text, uint32_t line_px, uint32_t *px, uint32_t maxw, uint32_t maxh,
@@ -46,14 +49,24 @@ bool nv2a_fps_render(const char *text, uint32_t line_px, uint32_t *px, uint32_t 
     static uint32_t *cache;
     static bool ok;
 
-    if (!cache || strncmp(text, last, sizeof last) || line_px != last_line || maxw != last_mw || maxh != last_mh) {
+    char display_text[64];
+    if (ngb_autosave_banner_active()) {
+        if (ngb_pc_setting(5) && text && *text)
+            snprintf(display_text, sizeof(display_text), "[ AUTOSAVED ]  %s", text);
+        else
+            snprintf(display_text, sizeof(display_text), "[ AUTOSAVED ]");
+    } else {
+        snprintf(display_text, sizeof(display_text), "%s", text ? text : "");
+    }
+
+    if (!cache || strncmp(display_text, last, sizeof last) || line_px != last_line || maxw != last_mw || maxh != last_mh) {
         uint32_t *grown = realloc(cache, (size_t)maxw * maxh * 4);
         if (!grown)
-            return fps_rasterize(text, line_px, px, maxw, maxh, ow, oh);
+            return fps_rasterize(display_text, line_px, px, maxw, maxh, ow, oh);
         cache = grown;
-        snprintf(last, sizeof last, "%s", text);
+        snprintf(last, sizeof last, "%s", display_text);
         last_line = line_px, last_mw = maxw, last_mh = maxh;
-        ok = fps_rasterize(text, line_px, cache, maxw, maxh, &w, &h);
+        ok = fps_rasterize(display_text, line_px, cache, maxw, maxh, &w, &h);
     }
     if (!ok)
         return false;

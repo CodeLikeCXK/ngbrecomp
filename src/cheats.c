@@ -236,6 +236,7 @@ static void pos_tick(void)
 }
 
 void ngb_aspect_frame_end(void);   /* src/pc_menu.c */
+void ngb_autosave_tick(void);       /* src/autosave.c */
 
 void ngb_frame_tick(void)
 {
@@ -245,6 +246,7 @@ void ngb_frame_tick(void)
     cheat_tick();
     memdump_tick();
     poke_tick();
+    ngb_autosave_tick();
 }
 
 /* ---- every difficulty from the start ----
