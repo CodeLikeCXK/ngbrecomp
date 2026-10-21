@@ -21,10 +21,12 @@
 #include "port.h"
 #include "input/xinput_xbox.h"
 
+int ngb_quick_controls_active(void);
+int ngb_quick_frozen(void);
 int ngb_menu_up(void);   /* src/menu_mouse.c */
 
 /* What an action presses on the game's pad. */
-enum { T_BTN, T_AN, T_AN2, T_AXIS };
+enum { T_BTN, T_AN, T_AN2, T_AXIS, T_HOST };
 typedef struct {
     const char *name, *ini, *help;
     int key0, key1, pad;
@@ -78,6 +80,13 @@ static const Action s_act[A_COUNT] = {
       XBOX_GAMEPAD_DPAD_LEFT, 0 },
     { "D-Pad Right", "dpad_right", "The controller's directional pad.", SDL_SCANCODE_RIGHT, 0, P(P_DR), T_BTN,
       XBOX_GAMEPAD_DPAD_RIGHT, 0 },
+    /* Keep the four original setting names and IDs for existing profiles. */
+    { "Quick Menu: Category Up", "quick_weapons", "Opens Melee Weapons; while open, selects the previous category.", SDL_SCANCODE_UP, SDL_SCANCODE_1, P(P_DU), T_HOST, 1, 0 },
+    { "Quick Menu: Category Down", "quick_items", "Opens Consumables; while open, selects the next category.", SDL_SCANCODE_DOWN, SDL_SCANCODE_2, P(P_DD), T_HOST, 2, 0 },
+    { "Quick Menu: Previous", "quick_left", "Selects the previous entry while the quick menu is open.", SDL_SCANCODE_LEFT, 0, P(P_DL), T_HOST, 4, 0 },
+    { "Quick Menu: Next", "quick_right", "Selects the next entry while the quick menu is open.", SDL_SCANCODE_RIGHT, 0, P(P_DR), T_HOST, 8, 0 },
+    { "Quick Menu: Confirm", "quick_confirm", "Equips the selected weapon or Ninpo, or uses the selected item.", SDL_SCANCODE_RETURN, 0, P(P_A), T_HOST, 16, 0 },
+    { "Quick Menu: Cancel", "quick_cancel", "Closes the quick menu without applying the selection.", SDL_SCANCODE_ESCAPE, SDL_SCANCODE_BACKSPACE, P(P_B), T_HOST, 32, 0 },
 };
 
 static int s_bind[A_COUNT][3];
@@ -104,11 +113,16 @@ static void identity_check(void)
             s_pad_identity = 0;
 }
 
-static int s_invert[2];   /* the right stick's X and Y, inverted in play (controls.ini) */
+/* The right stick's X and Y, inverted in play, for the third-person camera ([0]) and the first-person view
+ * ([1]; its Y is the game's own option, src/camera.c); and the view the stick starts in after a load
+ * (controls.ini; #33 #63 #23) */
+static int s_invert[2][2];
+static int s_third_start;
 
 void ngb_bind_defaults(void)
 {
-    s_invert[0] = s_invert[1] = 0;
+    memset(s_invert, 0, sizeof s_invert);
+    s_third_start = 0;
     for (int a = 0; a < A_COUNT; a++) {
         s_bind[a][0] = s_act[a].key0;
         s_bind[a][1] = s_act[a].key1;
@@ -224,7 +238,9 @@ static void save(void)
             snprintf(p, sizeof p, "-");
         fprintf(f, "%s = %s, %s, %s\n", s_act[a].ini, k0, k1, p);
     }
-    fprintf(f, "invert_camera_x = %d\ninvert_camera_y = %d\n", s_invert[0], s_invert[1]);
+    fprintf(f, "invert_camera_x = %d\ninvert_camera_y = %d\n", s_invert[0][0], s_invert[0][1]);
+    fprintf(f, "invert_first_person_x = %d\n", s_invert[1][0]);
+    fprintf(f, "third_person_on_load = %d\n", s_third_start);
     fclose(f);
 }
 
@@ -237,12 +253,22 @@ void ngb_bind_load(void)
     FILE *f = fopen(path, "r");
     if (!f)
         return;
+    int first_set = 0;   /* a file from before the views were separate: its choice holds for both */
     while (fgets(line, sizeof line, f)) {
         char key[64], val[400];
         if (line[0] == '#' || sscanf(line, " %63[^= ] = %399[^\r\n]", key, val) != 2)
             continue;
         if (!strcmp(key, "invert_camera_x") || !strcmp(key, "invert_camera_y")) {
-            s_invert[key[14] == 'y'] = atoi(val) != 0;
+            s_invert[0][key[14] == 'y'] = atoi(val) != 0;
+            continue;
+        }
+        if (!strcmp(key, "invert_first_person_x")) {
+            s_invert[1][0] = atoi(val) != 0;
+            first_set = 1;
+            continue;
+        }
+        if (!strcmp(key, "third_person_on_load")) {
+            s_third_start = atoi(val) != 0;
             continue;
         }
         for (int a = 0; a < A_COUNT; a++) {
@@ -264,6 +290,9 @@ void ngb_bind_load(void)
         }
     }
     fclose(f);
+    if (!first_set)
+        s_invert[1][0] = s_invert[0][0];
+    s_invert[1][1] = 0;   /* first-person up/down: the game's own Options > 1st Person Camera Control */
     identity_check();
     s_gen++;
 }
@@ -290,7 +319,8 @@ void ngb_bind_set(int a, int slot, int in)
     if (in) {
         for (int o = 0; o < A_COUNT; o++)
             for (int s = 0; s < 3; s++) {
-                if (s_bind[o][s] != in || (o == a && s == slot))
+                if ((a >= A_QUICK_WEAPONS) != (o >= A_QUICK_WEAPONS) ||
+                    s_bind[o][s] != in || (o == a && s == slot))
                     continue;
                 if (slot == 2)
                     s_bind[o][s] = s_bind[a][2];       /* a controller button: swapped */
@@ -328,6 +358,17 @@ static int input_down(int in, const Uint8 *k, Uint32 mouse)
     return in < SDL_NUM_SCANCODES && k[in];
 }
 
+/* Quick-menu bindings share physical buttons with combat without stealing
+ * their saved assignments. Consume those inputs only while choosing. */
+static int quick_input(int input)
+{
+    if (!input) return 0;
+    for (int a = A_QUICK_WEAPONS; a < A_COUNT; a++)
+        for (int slot = 0; slot < 3; slot++)
+            if (s_bind[a][slot] == input) return 1;
+    return 0;
+}
+
 static void press(XBOX_INPUT_STATE *st, const Action *t, int v, int axes[4])
 {
     BYTE *an = st->Gamepad.bAnalogButtons;
@@ -356,28 +397,44 @@ static SHORT clamp_axis(int v)
     return (SHORT)(v > 32767 ? 32767 : v < -32767 ? -32767 : v);
 }
 
-int ngb_bind_invert(int axis)
+int ngb_bind_invert(int view, int axis)
 {
     ensure();
-    return axis >= 0 && axis < 2 && s_invert[axis];
+    return view >= 0 && view < 2 && axis >= 0 && axis < 2 && s_invert[view][axis];
 }
 
-void ngb_bind_set_invert(int axis, int on)
+void ngb_bind_set_invert(int view, int axis, int on)
 {
     ensure();
-    if (axis < 0 || axis > 1)
+    if (view < 0 || view > 1 || axis < 0 || axis > 1)
         return;
-    s_invert[axis] = on != 0;
+    s_invert[view][axis] = on != 0;
     s_gen++;
     save();
 }
 
-/* The right stick as the player wants the camera turned (in play only). */
+int ngb_bind_third_person_start(void)
+{
+    ensure();
+    return s_third_start;
+}
+
+void ngb_bind_set_third_person_start(int on)
+{
+    ensure();
+    s_third_start = on != 0;
+    s_gen++;
+    save();
+}
+
+/* The right stick as the player wants the camera turned (in play only), for the view it turns now. */
 static void apply_invert(XBOX_INPUT_STATE *st)
 {
-    if (s_invert[0])
+    extern int ngb_camera_first_person(void);   /* src/camera.c */
+    const int *inv = s_invert[ngb_camera_first_person() ? 1 : 0];
+    if (inv[0])
         st->Gamepad.sThumbRX = clamp_axis(-(int)st->Gamepad.sThumbRX);
-    if (s_invert[1])
+    if (inv[1])
         st->Gamepad.sThumbRY = clamp_axis(-(int)st->Gamepad.sThumbRY);
 }
 
@@ -385,11 +442,17 @@ static void apply_invert(XBOX_INPUT_STATE *st)
 void ngb_bind_play_state(const Uint8 *k, Uint32 mouse, XBOX_INPUT_STATE *st, int look_x, int look_y)
 {
     ensure();
+    if (ngb_quick_frozen()) {
+        memset(&st->Gamepad, 0, sizeof st->Gamepad);
+        return;
+    }
     int axes[4] = { 0, 0, look_x, look_y };
     st->Gamepad.wButtons = 0;
     memset(st->Gamepad.bAnalogButtons, 0, sizeof st->Gamepad.bAnalogButtons);
-    for (int a = 0; a < A_COUNT; a++)
-        if (input_down(s_bind[a][0], k, mouse) || input_down(s_bind[a][1], k, mouse))
+    int quick = ngb_quick_controls_active();
+    for (int a = 0; a < A_QUICK_WEAPONS; a++)
+        if (((!quick || !quick_input(s_bind[a][0])) && input_down(s_bind[a][0], k, mouse)) ||
+            ((!quick || !quick_input(s_bind[a][1])) && input_down(s_bind[a][1], k, mouse)))
             press(st, &s_act[a], 255, axes);
     st->Gamepad.sThumbLX = clamp_axis(axes[0]);
     st->Gamepad.sThumbLY = clamp_axis(axes[1]);
@@ -415,18 +478,42 @@ static void pad_inputs(const XBOX_INPUT_STATE *st, int v[P_COUNT])
         v[bm[i].p] = b & bm[i].bit ? 255 : 0;
 }
 
+unsigned ngb_bind_quick_state(const Uint8 *keys, unsigned mouse, const XBOX_INPUT_STATE *pad)
+{
+    ensure();
+    int v[P_COUNT] = {0};
+    if (pad)
+        pad_inputs(pad, v);
+    unsigned bits = 0;
+    for (int a = A_QUICK_WEAPONS; a < A_COUNT; a++) {
+        int p = s_bind[a][2];
+        if (input_down(s_bind[a][0], keys, mouse) || input_down(s_bind[a][1], keys, mouse) ||
+            ((p & BIND_PAD) && (p & 255) < P_COUNT && v[p & 255] > 40))
+            bits |= s_act[a].a;
+    }
+    return bits;
+}
+
 /* xboxrecomp's input, each controller read (weak there): in play the
  * controller's buttons go to the actions they are bound to. */
 void xbox_pad_remap(XBOX_INPUT_STATE *st)
 {
+    if (ngb_quick_frozen()) {
+        memset(&st->Gamepad, 0, sizeof st->Gamepad);
+        return;
+    }
     ensure();
     if (ngb_menu_up())
         return;
     apply_invert(st);
-    if (s_pad_identity || getenv("NGB_NO_PAD_REMAP"))
+    int quick = ngb_quick_controls_active();
+    if (!quick && (s_pad_identity || getenv("NGB_NO_PAD_REMAP")))
         return;
     int v[P_COUNT], axes[4] = { 0 };
     pad_inputs(st, v);
+    if (quick)
+        for (int p = 0; p < P_COUNT; p++)
+            if (quick_input(BIND_PAD | p)) v[p] = 0;
     st->Gamepad.wButtons = 0;
     memset(st->Gamepad.bAnalogButtons, 0, sizeof st->Gamepad.bAnalogButtons);
     for (int a = 0; a < A_COUNT; a++) {
@@ -452,7 +539,7 @@ void ngb_bind_capture_begin(int a, int slot)
     s_cap_since = SDL_GetTicks64();
     XBOX_INPUT_STATE st;
     memset(s_cap_prev, 0, sizeof s_cap_prev);
-    if (xbox_InputGetState(0, &st) == 0)
+    if (xbox_InputGetStateRaw(0, &st) == 0)
         pad_inputs(&st, s_cap_prev);
     __atomic_store_n(&s_cap_action, a, __ATOMIC_RELEASE);
 }
@@ -471,7 +558,7 @@ int ngb_bind_capture_tick(void)
     if (!r && s_cap_slot == 2) {                   /* the controller: its next button down */
         XBOX_INPUT_STATE st;
         int v[P_COUNT] = { 0 };
-        if (!xbox_InputKeyboardActive() && xbox_InputGetState(0, &st) == 0) {
+        if (xbox_InputGetStateRaw(0, &st) == 0) {
             pad_inputs(&st, v);
             for (int p = 0; p < P_COUNT && !r; p++)
                 if (v[p] > 120 && s_cap_prev[p] <= 120)

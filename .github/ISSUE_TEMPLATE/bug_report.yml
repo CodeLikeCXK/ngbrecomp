@@ -64,5 +64,6 @@ body:
       description: |
         For a graphics glitch: press F7 while it is on screen and attach the `ngb-trace-<n>` folder it
         writes to your home folder (`C:\Users\<you>` on Windows), zipped.
-        For a crash or a problem starting: the log (the terminal's output on Linux, `log.txt` beside
-        the saves in `%LOCALAPPDATA%\NinjaGaidenBlack` on Windows).
+        For a crash or a problem starting: the log, `log.txt` beside the saves
+        (`%LOCALAPPDATA%\NinjaGaidenBlack` on Windows, `~/.local/share/NinjaGaidenBlack` on Linux),
+        or the terminal's output if you started it from one. See CONTRIBUTING.md.

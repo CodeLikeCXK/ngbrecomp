@@ -16,6 +16,8 @@ enum {
     A_MOVE_UP, A_MOVE_DOWN, A_MOVE_LEFT, A_MOVE_RIGHT,
     A_CAM_UP, A_CAM_DOWN, A_CAM_LEFT, A_CAM_RIGHT,
     A_DPAD_UP, A_DPAD_DOWN, A_DPAD_LEFT, A_DPAD_RIGHT,
+    A_QUICK_WEAPONS, A_QUICK_ITEMS, A_QUICK_LEFT, A_QUICK_RIGHT,
+    A_QUICK_CONFIRM, A_QUICK_CANCEL,
     A_COUNT
 };
 
@@ -37,10 +39,15 @@ int ngb_bind_pad_fixed(int action);           /* the sticks: not the controller'
  * taken from another action swaps with it. Saved at once. */
 void ngb_bind_set(int action, int slot, int input);
 void ngb_bind_defaults(void);
-/* The camera's direction in play (the right stick, and the mouse and keys for it): 0 X, 1 Y. The game
- * turns its third-person camera inverted on both axes and has no option for it (issue #26). */
-int ngb_bind_invert(int axis);
-void ngb_bind_set_invert(int axis, int on);
+/* The camera's direction in play (the right stick, and the mouse and keys for it), for view 0 the
+ * third-person camera, 1 the first-person view; axis 0 X, 1 Y. The game turns its third-person camera
+ * inverted on both axes and has no option for it (issue #26); the views apart: #33, #63. */
+int ngb_bind_invert(int view, int axis);
+void ngb_bind_set_invert(int view, int axis, int on);
+/* After a load, the right stick turns the third-person camera (1) instead of looking in first person, the
+ * game's own start (0; src/camera.c, #23). */
+int ngb_bind_third_person_start(void);
+void ngb_bind_set_third_person_start(int on);
 void ngb_bind_load(void);
 /* The input's name for the page ("Left Shift", "Mouse Left", "Y"), and a
  * short one for a keycap (1-3 characters; "" for a mouse button). */
@@ -50,6 +57,9 @@ void ngb_bind_input_short(int input, char *out, int n);
  * in play's prompts; 0 none. */
 int ngb_bind_prompt(int analog_button);
 unsigned ngb_bind_generation(void);           /* changes when the bindings do */
+/* Quick-menu actions from physical inputs, before gameplay remapping. */
+struct XBOX_INPUT_STATE;
+unsigned ngb_bind_quick_state(const unsigned char *keys, unsigned mouse, const struct XBOX_INPUT_STATE *pad);
 
 /* Waiting for an input for a slot: the next key or mouse button (slots 0-1,
  * from the window's events) or controller button (slot 2, polled). */

@@ -20,11 +20,14 @@ typedef struct NgbSettings {
     int anisotropy;      /* 0 the console's texture filtering; 2, 4, 8, 16 trilinear + anisotropic */
     int msaa;            /* MSAA samples: 1 (off), 2, 4, 8 */
     int shadow_scale;    /* shadow map resolution multiple: 1, 2, 4 or 8 */
+    int quick_menu_freeze; /* pause gameplay while the D-pad carousel is open */
+    int quick_menu_scale;  /* whole menu size: 100..10 in tens; 0 disables it */
     int skip_intro;
     int show_launcher;   /* show the settings screen at startup */
     int all_difficulties;
     int all_costumes;       /* every costume at New Game's Costume Selection */
     int movie_43;           /* the game's Movie Display Ratio 4:3 (kept here: src/pc_menu.c) */
+    int smooth_glow;        /* the glow's continuous filtering (src/d3d/vk/glow_filter.h, #64) */
     /* Hard, Very Hard and Master Ninja offered without clearing the one before */
 } NgbSettings;
 
@@ -45,6 +48,10 @@ void ngb_settings_row_text(const NgbSettings *s, int item, const char **label,
  * menus step to, in the order Off, Mailbox, FIFO, Adaptive. */
 const char *ngb_vsync_name(int v);
 int ngb_vsync_step(int v, int dir);
+
+/* Display's quick-menu percentages, 100 down to 0 (Off), in tens. */
+int ngb_quick_scale_value(int v);
+int ngb_quick_scale_step(int v, int dir);
 
 /* The window sizes offered for an aspect ratio, smallest first; the index of
  * the settings' own (-1: none of them). */

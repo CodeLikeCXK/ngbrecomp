@@ -32,6 +32,7 @@
 #include <limits.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 #include "platform/win32_compat.h"
@@ -52,6 +53,7 @@
 extern void xbox_InputInit(void);
 #if defined(NGB_NV2A_VK)
 #include "launcher.h"
+#include "quick_select.h"
 
 /* Skip intro movie: see src/movie_skip.c. The kernel's open hook tells it
  * which movie the title is about to play. */
@@ -446,6 +448,7 @@ static void sample_on_signal(int sig, siginfo_t *si, void *uc)
             nv2a_vk_sample_threads();
 #endif
         xbox_PeekSample("sample");
+        compat_suspend_dump();   /* the threads' last suspensions and resumes: a lost wake-up shows there */
         {   /* NGB_DUMP_RAM=path: the guest's low 64 MB, then the 128 MB
              * contiguous window, to path.N */
             const char *path = getenv("NGB_DUMP_RAM");
@@ -1048,8 +1051,13 @@ static void portable_init(void)
 int main(int argc, char **argv)
 {
     portable_init();   /* before anything picks a folder (the log's, first) */
-#ifdef __APPLE__
-    if (!getenv("NGB_TEST_HIDDEN") && !isatty(STDOUT_FILENO)) {
+#if !defined(_WIN32)
+    /* No terminal and no file of the player's own (the Mac's Finder, Steam on Linux -- a Steam Deck in Game
+     * Mode): the output to log.txt in the save folder, as on Windows, or a start that fails there leaves
+     * nothing to look at (#11). Sent to a file already (`> log 2>&1`), it stays there. */
+    struct stat out_st;
+    bool to_file = fstat(STDOUT_FILENO, &out_st) == 0 && S_ISREG(out_st.st_mode);
+    if (!getenv("NGB_TEST_HIDDEN") && !isatty(STDOUT_FILENO) && !to_file) {
         char log[4200];
         save_dir_path(log, sizeof log - 16);
         ngb_mkdir(log);
@@ -1183,6 +1191,7 @@ int main(int argc, char **argv)
 
     printf("=== Ninja Gaiden Black - Static Recompilation ===\n");
     printf("Game directory: %s\n", s_game_dir);
+    { extern void ngb_quick_set_game_dir(const char *); ngb_quick_set_game_dir(s_game_dir); }
 
 #if defined(_WIN32)
     SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_UNDNAME);
@@ -1372,8 +1381,10 @@ int main(int argc, char **argv)
 
 #if defined(NGB_NV2A_VK)
     if (s_use_gpu && !s_headless) {
-        while (nv2a_window_pump())
+        while (nv2a_window_pump()) {
+            ngb_quick_poll();
             usleep(2000);
+        }
         printf("Window closed.\n");
         _exit(0);
     }

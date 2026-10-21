@@ -117,6 +117,11 @@ static int has_xbe(const char *dir)
     return is_file(p);
 }
 
+/* The folder mkdirs could not make, and why (its errno, kept from mkdir: the is_dir after it reset
+ * errno, and a refusal or a broken link came out as "No such file or directory", #6). */
+static char s_mk_at[4096];
+static int s_mk_errno;
+
 static int mkdirs(const char *path)
 {
     char tmp[4096];
@@ -126,7 +131,7 @@ static int mkdirs(const char *path)
      * and on Windows making "D:" fails with an error that is not "it exists" -- an install to another
      * drive then failed, said as "the disc image could not be read" (#14, #6) */
     if (tmp[0] && tmp[1] == ':')
-        q = tmp + 2;
+        q = tmp + (tmp[2] == '/' || tmp[2] == '\\' ? 3 : 2);
     else if ((tmp[0] == '/' || tmp[0] == '\\') && (tmp[1] == '/' || tmp[1] == '\\')) {
         int seps = 0;
         for (q = tmp + 2; *q && seps < 2; q++)
@@ -139,11 +144,38 @@ static int mkdirs(const char *path)
         if (*q != '/' && *q != '\\')
             continue;
         *q = 0;
-        if (mkdir(tmp, 0755) != 0 && errno != EEXIST && !is_dir(tmp))
-            return -1;
+        if (mkdir(tmp, 0755) != 0) {
+            int e = errno;
+            if (!is_dir(tmp)) {
+                snprintf(s_mk_at, sizeof s_mk_at, "%s", tmp);
+                errno = s_mk_errno = e == EEXIST ? ENOTDIR : e;   /* there, but not a folder: a file, a broken link */
+                return -1;
+            }
+        }
         *q = '/';
     }
-    return mkdir(tmp, 0755) == 0 || errno == EEXIST ? 0 : -1;
+    if (mkdir(tmp, 0755) == 0 || (errno == EEXIST && is_dir(tmp)))
+        return 0;
+    s_mk_errno = errno == EEXIST ? ENOTDIR : errno;
+    snprintf(s_mk_at, sizeof s_mk_at, "%s", tmp);
+    errno = s_mk_errno;
+    return -1;
+}
+
+/* The failure of mkdirs(path), said: which folder, why, and on Windows the way round it */
+static void fail_mkdirs(const char *path)
+{
+    char where[4200] = "";
+    if (s_mk_errno == ENOENT)   /* the folder above it is there but not usable */
+        snprintf(where, sizeof where, "\n(at %s: the folder it goes in can't be opened, perhaps a broken link)", s_mk_at);
+    else if (strcmp(s_mk_at, path))
+        snprintf(where, sizeof where, "\n(at %s)", s_mk_at);
+#if defined(_WIN32)
+    fail("Cannot create the folder %s: %s%s\n\nTo install next to the program instead, tick \"Keep the game, "
+         "saves and settings next to the program\" on the first screen.", path, strerror(s_mk_errno), where);
+#else
+    fail("Cannot create the folder %s: %s%s", path, strerror(s_mk_errno), where);
+#endif
 }
 
 /* 0 when dir's default.xbe is the one this build was made from. */
@@ -346,7 +378,7 @@ static int extract_dir(Image *im, uint32_t sector, uint32_t size, const char *de
             snprintf(path, sizeof path, "%s/%s", dest, name);
             if (attr & 0x10) {
                 if (!im->count_only && mkdirs(path) != 0) {
-                    fail("Cannot create the folder %s: %s", path, strerror(errno));
+                    fail_mkdirs(path);
                     rc = -1;
                 } else {
                     rc = extract_dir(im, sec, sz, path);
@@ -387,7 +419,7 @@ static int extract_iso(const char *iso, const char *dest)
             im.count_only = 0;
             if (rc == 0) {
                 if (mkdirs(dest) != 0) {
-                    fail("Cannot create the folder %s: %s", dest, strerror(errno));
+                    fail_mkdirs(dest);
                     rc = -1;
                 } else {
                     rc = extract_dir(&im, root, rsize, dest);
@@ -734,7 +766,9 @@ static int install_image(const char *src, const char *dest)
         snprintf(tmp, sizeof tmp, "%s.unpack", dest);
         remove_tree(tmp);
         progress(0, 0);   /* no measure of an unpacker's progress */
-        if (mkdirs(tmp) == 0 && unpack_archive(src, tmp) == 0) {
+        if (mkdirs(tmp) != 0)
+            fail_mkdirs(tmp);
+        else if (unpack_archive(src, tmp) == 0) {
             if (find_iso(tmp, iso, sizeof iso))
                 rc = extract_iso(iso, dest);
             else

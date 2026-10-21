@@ -81,7 +81,9 @@ void ngb_menu_set_running(const NgbSettings *s)
  * startup, 10 MSAA samples (1, 2, 4, 8); 1 is the anisotropy (0, 2-16);
  * 11-13 the cheats (src/cheats.c: infinite health, ninpo, essence), 14 every
  * difficulty from the start (src/cheats.c, saved), 15 the golden scarabs
- * cheat, 16 every costume (saved), 17 an extra costume (0-3, saved). A change
+ * cheat, 16 every costume (saved), 17 an extra costume (0-3, saved), 18 Smoother
+ * Glow (src/d3d/vk/glow_options.h), 19 quick-menu pause, 20 quick-menu scale (100..0
+ * percent, in tens), 21 infinite items, 22 infinite projectiles (cheats, src/cheats.c). A change
  * applies at once (8 and 9 at the next start) and is saved, the cheats'
  * not. */
 int ngb_cheat(int which);
@@ -95,6 +97,8 @@ int ngb_pc_setting(int which)
         return ngb_cheat(which - 11);
     if (which == 15)
         return ngb_cheat(3);
+    if (which == 21 || which == 22)                    /* infinite items, infinite projectiles */
+        return ngb_cheat(which - 17);
     if (which == 14 || which == 16 || which == 17) {
         ngb_pc_setting(0);
         return which == 14 ? s_running.all_difficulties : which == 16 ? s_running.all_costumes : s_running.movie_43;
@@ -117,14 +121,17 @@ int ngb_pc_setting(int which)
     case 8:  return s_running.skip_intro;
     case 9:  return s_running.show_launcher;
     case 10: return s_running.msaa;
+    case 18: return s_running.smooth_glow;
+    case 19: return s_running.quick_menu_freeze;
+    case 20: return s_running.quick_menu_scale;
     default: return s_running.show_fps;
     }
 }
 
 void ngb_pc_set_setting(int which, int value)
 {
-    if ((which >= 11 && which <= 13) || which == 15) {
-        ngb_cheat_set(which == 15 ? 3 : which - 11, value);
+    if ((which >= 11 && which <= 13) || which == 15 || which == 21 || which == 22) {
+        ngb_cheat_set(which == 15 ? 3 : which >= 21 ? which - 17 : which - 11, value);
         return;
     }
     ngb_pc_setting(0);
@@ -135,6 +142,8 @@ void ngb_pc_set_setting(int which, int value)
     case 0: s_running.scale = value; break;
     case 1: s_running.anisotropy = value; break;
     case 10: s_running.msaa = value; break;
+    case 19: s_running.quick_menu_freeze = !!value; break;
+    case 20: s_running.quick_menu_scale = ngb_quick_scale_value(value); break;
     case 2: s_running.shadow_scale = value; break;
     case 3:
         s_running.fullscreen = value;
@@ -144,6 +153,7 @@ void ngb_pc_set_setting(int which, int value)
     case 5: s_running.show_fps = value; nv2a_present_set_show_fps(value); break;
     case 8: s_running.skip_intro = value; break;        /* both at the next start */
     case 9: s_running.show_launcher = value; break;
+    case 18: s_running.smooth_glow = !!value; break;
     case 6:
         if (value / 8 == s_running.aspect && value % 8 < ngb_settings_size_count(value / 8)) {
             ngb_settings_size_at(value / 8, value % 8, &s_running.width, &s_running.height);
@@ -1181,6 +1191,8 @@ static bool game_mouse(const SDL_Event *ev)
 void nv2a_window_event_hook(const void *sdl_event)
 {
     const SDL_Event *ev = sdl_event;
+    extern int ngb_quick_event(const void *event);
+    if (ngb_quick_event(ev)) return;
     if (ev->type == SDL_KEYDOWN && ev->key.keysym.sym == SDLK_F7 && !ev->key.repeat) {
         extern volatile int ngb_trace_request;   /* src/d3d/vk/backend.cpp: record the next frames */
         ngb_trace_request = 1;

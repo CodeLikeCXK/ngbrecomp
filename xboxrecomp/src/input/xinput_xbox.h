@@ -93,6 +93,8 @@ void xbox_InputInit(void);
  * Port: 0-3 (Xbox controller ports)
  */
 DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState);
+/* Physical controller only: no keyboard substitution or title remapping. */
+DWORD xbox_InputGetStateRaw(DWORD dwPort, XBOX_INPUT_STATE *pState);
 
 /**
  * Set controller vibration.

@@ -1,8 +1,8 @@
 # Third-party components
 
-This project's own code is under the GNU General Public License, version 2 or (at your option) any
-later version (GPL-2.0-or-later, [LICENSE](LICENSE)); the `xboxrecomp/` directory keeps its MIT
-license. The project is built from, and its release packages contain, the following parts, each under
+This project's own code is under the GNU General Public License, version 3 or (at your option) any
+later version (GPL-3.0-or-later, [LICENSE](LICENSE); up to 0.9.24, GPL-2.0-or-later); the
+`xboxrecomp/` directory keeps its MIT license. The project is built from, and its release packages contain, the following parts, each under
 its own license.
 
 ## In this repository
@@ -23,6 +23,7 @@ runs on, in `xboxrecomp/` with this port's changes) is MIT licensed (`xboxrecomp
 | Component | License |
 |---|---|
 | xemu's NV2A GPU model and Vulkan renderer, MCPX APU (`src/nv2a_vk`, `src/apu`) | LGPL-2.1-or-later |
+| xemu's shader generators (`src/nv2a_vk/xemu/pgraph/glsl/psh.c`, `vsh-prog.c`, `vsh-prog.h`, `pgraph/vsh_regs.h`) | GPL-2.0 or GPL-3.0 |
 | volk, Vulkan Memory Allocator, Vulkan-Headers | MIT / Apache-2.0 |
 | SPIRV-Reflect | Apache-2.0 |
 | stb (stb_truetype, stb_image) | MIT / public domain |

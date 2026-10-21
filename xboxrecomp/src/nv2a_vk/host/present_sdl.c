@@ -945,6 +945,38 @@ static void capture_display(PGRAPHState *pg)
     snprintf(path, sizeof(path), "%s%03d.ppm", prefix, n++);
     if ((f = fopen(path, "wb"))) {
         const uint8_t *px = info.pMappedData;
+        /* NV2A_CAPTURE_SCALE=n: each n x n block averaged, for captures at a high render scale */
+        static int sc = -1;
+        if (sc < 0) {
+            const char *e = getenv("NV2A_CAPTURE_SCALE");
+            sc = e && atoi(e) > 1 ? atoi(e) : 1;
+        }
+        if (sc > 1) {
+            int ow = w / sc, oh = h / sc;
+            fprintf(f, "P6\n%d %d\n255\n", ow, oh);
+            uint8_t *row = g_malloc((size_t)ow * 3);
+            for (int oy = 0; oy < oh; oy++) {
+                for (int ox = 0; ox < ow; ox++) {
+                    unsigned sum[3] = { 0, 0, 0 };
+                    for (int dy = 0; dy < sc; dy++) {
+                        int i = oy * sc + dy, y = ext ? i : h - 1 - i;
+                        for (int dx = 0; dx < sc; dx++) {
+                            const uint8_t *q = px + ((size_t)y * w + ox * sc + dx) * 4;
+                            sum[0] += ext ? q[2] : q[0];
+                            sum[1] += q[1];
+                            sum[2] += ext ? q[0] : q[2];
+                        }
+                    }
+                    for (int c = 0; c < 3; c++)
+                        row[ox * 3 + c] = (uint8_t)(sum[c] / (unsigned)(sc * sc));
+                }
+                fwrite(row, 1, (size_t)ow * 3, f);
+            }
+            g_free(row);
+            fclose(f);
+            vmaDestroyBuffer(r->allocator, buf, alloc);
+            return;
+        }
         fprintf(f, "P6\n%d %d\n255\n", w, h);
         uint8_t *row = g_malloc((size_t)w * 3);
         for (int i = 0; i < h; i++) {

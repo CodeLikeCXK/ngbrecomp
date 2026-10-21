@@ -77,14 +77,15 @@ void ngb_pc_set_setting(int which, int value);
 /* The settings, numbered as ngb_pc_setting has them. */
 enum { S_RENDER, S_TEXTURE, S_SHADOW, S_DISPLAY, S_VSYNC, S_FPS, S_WINDOW, S_ASPECT,
        S_SKIP, S_LAUNCHER, S_MSAA, S_HEALTH, S_NINPO, S_ESSENCE, S_ALLDIFF, S_SCARABS, S_ALLCOST, S_EXTRACOST,
-       S_COUNT };
+       S_GLOW, S_QUICKFREEZE, S_QUICKSCALE, S_INFITEMS, S_INFAMMO, S_COUNT };
 
 static const char *const s_label[S_COUNT] = {
     "Render Resolution", "Anisotropic Filtering", "Shadow Resolution",
     "Display", "V-Sync", "FPS Counter", "Window Size", "Aspect Ratio",
     "Skip Intros", "Settings at Startup", "Anti-Aliasing (MSAA)",
     "Infinite Health", "Infinite Ninpo", "Infinite Essence", "All Difficulties",
-    "Golden Scarabs", "All Costumes", "Extra Costume",
+    "Golden Scarabs", "All Costumes", "Extra Costume", "Smoother Glow", "Quick Menu Pause",
+    "Quick Menu", "Infinite Items", "Infinite Projectiles",
 };
 static const char *const s_help[S_COUNT] = {
     "Draws the game at a multiple of the console's resolution.",
@@ -105,26 +106,61 @@ static const char *const s_help[S_COUNT] = {
     "All 50: Muramasa gives every reward. For this session only.",
     "Every costume at the Costume Selection, and three it never offers.",
     "Costumes in the game it never offers. From the next area.",
+    "A softer, fainter glow on bright lights. Off: the console's.",
+    "The game pauses while the quick menu is open (once Ryu's action ends).",
+    "A d-pad menu of weapons, Ninpo and items (Up and Down open it), at this size.",
+    "Elixirs, rations and the Talisman of Rebirth are not used up. For this session only.",
+    "Shuriken, smoke bombs, arrows and spears are not used up. For this session only.",
 };
 
 /* The categories: the strip's words, their rows. */
-#define CATS 5
-#define CAT_ROWS 5
-#define CAT_CTL 4                 /* Controls: the bindings' list (src/bindings.c), not settings */
-static const char *const s_cat_name[CATS] = { "Graphics", "Display", "Startup", "Cheats", "Controls" };
+#define CATS 6
+#define CAT_ROWS 6
+#define CAT_CTL 5                 /* Controls: the bindings' list (src/bindings.c), not settings */
+/* Gameplay: optional changes to how the game plays (off unless chosen; docs/quick-menu.md) */
+static const char *const s_cat_name[CATS] = { "Graphics", "Display", "Startup", "Gameplay", "Cheats", "Controls" };
 static const signed char s_cat_rows[CATS][CAT_ROWS] = {
-    { S_RENDER, S_TEXTURE, S_MSAA, S_SHADOW, -1 },
+    { S_RENDER, S_TEXTURE, S_MSAA, S_SHADOW, S_GLOW },
     { S_ASPECT, S_WINDOW, S_DISPLAY, S_VSYNC, S_FPS },
     { S_SKIP, S_ALLDIFF, S_ALLCOST, -1 },
-    { S_HEALTH, S_NINPO, S_ESSENCE, S_SCARABS, -1 },
+    { S_QUICKSCALE, S_QUICKFREEZE, -1 },
+    { S_HEALTH, S_NINPO, S_ESSENCE, S_SCARABS, S_INFITEMS, S_INFAMMO },
     { -1 },
 };
 
 #include "bindings.h"
-#define CTL_INVX A_COUNT          /* the actions, then Invert Camera X and Y (#26), then Default Controls */
-#define CTL_INVY (A_COUNT + 1)
-#define CTL_DEF  (A_COUNT + 2)
-#define CTL_ROWS (A_COUNT + 3)
+/* the actions; then On/Off rows: Invert Camera X and Y (the third-person camera, #26), Invert First-Person X
+ * (#33, #63; its up/down is the game's own 1st Person Camera Control), Start in Third Person (#23); then
+ * Default Controls */
+#define CTL_INVX A_COUNT
+#define CTL_START (A_COUNT + 3)
+#define CTL_DEF  (A_COUNT + 4)
+#define CTL_ROWS (A_COUNT + 5)
+#define CTL_TOGGLE(r) ((r) >= CTL_INVX && (r) <= CTL_START)
+static const char *const s_ctl_toggle_name[4] = {
+    "Invert Camera X", "Invert Camera Y", "Invert First-Person X", "Start in Third Person",
+};
+static const char *const s_ctl_toggle_help[4] = {
+    "Turns the third-person camera the other way left and right (play only).",
+    "Turns the third-person camera the other way up and down (play only).",
+    "Turns the first-person view the other way left and right (play only).",
+    "After loading, the right stick turns the camera instead of looking in first person.",
+};
+static int ctl_toggle_get(int r)
+{
+    int k = r - CTL_INVX;
+    return k == 3 ? ngb_bind_third_person_start() : k == 2 ? ngb_bind_invert(1, 0) : ngb_bind_invert(0, k);
+}
+static void ctl_toggle_flip(int r)
+{
+    int k = r - CTL_INVX;
+    if (k == 3)
+        ngb_bind_set_third_person_start(!ngb_bind_third_person_start());
+    else if (k == 2)
+        ngb_bind_set_invert(1, 0, !ngb_bind_invert(1, 0));
+    else
+        ngb_bind_set_invert(0, k, !ngb_bind_invert(0, k));
+}
 
 static int cat_count(int c)
 {
@@ -153,6 +189,7 @@ static void value_text(int row, char *out, size_t n)
         break;
     }
     case S_ASPECT:  snprintf(out, n, "%s", v == 3 ? "21:9" : v == 2 ? "16:10" : v ? "16:9" : "4:3"); break;
+    case S_QUICKSCALE: if (v) snprintf(out, n, "%d%%", v); else snprintf(out, n, "Off"); break;
     case S_SKIP:
     case S_ALLDIFF:
     case S_ALLCOST:
@@ -198,6 +235,9 @@ static void change(int row, int step)
         break;
     case S_VSYNC:
         ngb_pc_set_setting(row, ngb_vsync_step(v, step));
+        break;
+    case S_QUICKSCALE:
+        ngb_pc_set_setting(row, ngb_quick_scale_step(v, step));
         break;
     case S_ASPECT:
         ngb_pc_set_setting(row, (v + (step > 0 ? 1 : 3)) % 4);
@@ -742,12 +782,12 @@ static void draw_controls(uint32_t *px, uint8_t *m, int focused, int row)
         float y = CTL_Y0 + i * ROW_H;
         if (sel)
             page_fill(px, 0, y + 2, 10, ROW_H - 4, 0xE6E4FF, 0.95f, 0.85f);
-        if (r == CTL_INVX || r == CTL_INVY) {          /* Invert Camera X / Y: On or Off */
+        if (CTL_TOGGLE(r)) {                           /* the camera's On/Off rows */
             if (sel)
                 page_fill(px, 10, y + 2, 440, ROW_H - 4, 0x6E64DC, 0.85f, 0.05f);
-            page_text(px, m, r == CTL_INVX ? "Invert Camera X" : "Invert Camera Y", CTL_NAME_X + 6, y + 19, 18,
-                      sel ? 0xF5EB5A : focused ? 0xE6E6EB : 0xA0A0A8, 0);
-            page_text(px, m, ngb_bind_invert(r - CTL_INVX) ? "On" : "Off", s_ctl_cx[1], y + 18, 15,
+            page_text_fit(px, m, s_ctl_toggle_name[r - CTL_INVX], CTL_NAME_X + 6, y + 19, 18,
+                          sel ? 0xF5EB5A : focused ? 0xE6E6EB : 0xA0A0A8, 0, 260);
+            page_text(px, m, ctl_toggle_get(r) ? "On" : "Off", s_ctl_cx[2], y + 18, 15,
                       sel ? 0xFFFFFF : 0xC8C8D0, 1);
             continue;
         }
@@ -785,18 +825,13 @@ static void draw_controls(uint32_t *px, uint8_t *m, int focused, int row)
         help = s_ctl_col == 2 ? "Press the controller's button (wait to cancel)." : "Press a key or mouse button (Esc cancels).";
     else if (focused && row == CTL_DEF)
         help = "Every action as it was.";
-    else if (focused && (row == CTL_INVX || row == CTL_INVY))
-        help = row == CTL_INVX ? "Turns the camera the other way left and right (play only)."
-                               : "Turns the camera the other way up and down (play only).";
+    else if (focused && CTL_TOGGLE(row))
+        help = s_ctl_toggle_help[row - CTL_INVX];
     else if (focused && row >= 0)
         help = s_ctl_col == 2 && ngb_bind_pad_fixed(row) ? ngb_bind_help(row)
              : "A: change   X / Delete: clear   (play only; the menus keep theirs)";
-    int two = focused && !capturing && (row == CTL_INVX || row == CTL_INVY);   /* the stick itself is flipped */
     if (focused && help)
-        page_text_fit(px, m, help, 445, CTL_Y0 + CTL_SHOWN * ROW_H + (two ? 12 : 16), two ? 13 : 14, 0xFFFFFF, 2, 440);
-    if (two)
-        page_text_fit(px, m, "First-person look too: the game's Options > 1st Person Camera Control turns it back.",
-                      445, CTL_Y0 + CTL_SHOWN * ROW_H + 26, 12, 0xC8C8D0, 2, 440);
+        page_text_fit(px, m, help, 445, CTL_Y0 + CTL_SHOWN * ROW_H + 16, 14, 0xFFFFFF, 2, 440);
 }
 
 static void draw_page(int focused, int cat, int row)
@@ -810,17 +845,29 @@ static void draw_page(int focused, int cat, int row)
      * the right, the chosen word light violet, the others grey. */
     page_fill(px, 4, STRIP_Y, 442, STRIP_H, 0x14141C, 0.8f, 0.8f);   /* one colour behind all the words */
     page_fill(px, 4, STRIP_Y + STRIP_H - 1.5f, 442, 1.5f, 0xB4B9D2, 0.6f, 0.6f);
-    float x = STRIP_X0;
+    /* The words at 17, or smaller until they fit with a fair gap between them (six do not at 17). */
+    float x = STRIP_X0, words = 0, gap = STRIP_GAP, fs = 17;
+    for (;;) {
+        words = 0;
+        for (int c = 0; c < CATS; c++)
+            words += text_width(&s_font_body, s_cat_name[c], fs * k, 1.0f) / k;
+        gap = (440 - 2 * STRIP_X0 - words) / (CATS - 1);
+        if (gap >= 16 || fs <= 13)
+            break;
+        fs -= 1;
+    }
+    if (gap > STRIP_GAP)
+        gap = STRIP_GAP;
     for (int c = 0; c < CATS; c++) {
-        float w = text_width(&s_font_body, s_cat_name[c], 17 * k, 1.0f) / k;
+        float w = text_width(&s_font_body, s_cat_name[c], fs * k, 1.0f) / k;
         int on = c == cat, sel = focused && row < 0 && on;
         if (sel)
             page_fill(px, x - 6, STRIP_Y + 3, w + 12, STRIP_H - 6, 0x6E64DC, 0.75f, 0.75f);
-        page_text(px, m, s_cat_name[c], x, STRIP_Y + 19, 17,
+        page_text(px, m, s_cat_name[c], x, STRIP_Y + 19, fs,
                   sel ? 0xFFFFFF : on ? 0xC8C4FF : 0x8C8C96, 0);
         s_cat_x[c][0] = x - 6;
         s_cat_x[c][1] = x + w + 6;
-        x += w + STRIP_GAP;
+        x += w + gap;
     }
 
     if (cat == CAT_CTL) {
@@ -859,7 +906,7 @@ static void draw_page(int focused, int cat, int row)
 /* While the main menu's RECOMP SETTINGS has the Options menu (src/pc_menu.c)
  * its pictures say so: the header ("OPTIONS", sprite 0x23D) reads SETTINGS
  * and the category words (sprites 0x248-0x24D, slices of one texture) are
- * Graphics, Display and Startup Settings, Cheats and Exit. Each is a texture of
+ * Graphics, Display and Startup Settings, Gameplay, Cheats and Controls. Each is a texture of
  * ours put in the game's texture's place, the words drawn in the game's
  * pictures' style -- the size, the condensing and the colour of each row of
  * the letters measured from them, the shadow under them -- Liberation Serif
@@ -873,7 +920,7 @@ static uint32_t sprite_def(uint32_t id);
 #define RP_LABELS 6
 #define RP_WORDS 6
 static const char *const s_rp_word[RP_WORDS] = { "GRAPHICS SETTINGS", "DISPLAY SETTINGS", "STARTUP SETTINGS",
-                                                 "CHEATS", "CONTROLS", "EXIT" };
+                                                 "GAMEPLAY", "CHEATS", "CONTROLS" };
 
 static struct {
     GuestTex t;
@@ -1619,7 +1666,7 @@ static int ctl_hit(float x, float y)
     if (r >= CTL_ROWS)
         return -1;
     if (r >= A_COUNT)
-        c = 0;                                        /* Invert Camera, Default Controls: anywhere on it */
+        c = 0;                                        /* the camera rows, Default Controls: anywhere on it */
     for (int i = 0; i < 3 && r < A_COUNT; i++)
         if (fabsf(x - s_ctl_cx[i]) <= s_ctl_w[i] / 2)
             c = i;
@@ -1673,8 +1720,8 @@ static int ctl_keys(int key, int *row, int strip)
         break;
     }
     case K_OK:
-        if (*row == CTL_INVX || *row == CTL_INVY) {
-            ngb_bind_set_invert(*row - CTL_INVX, !ngb_bind_invert(*row - CTL_INVX));
+        if (CTL_TOGGLE(*row)) {
+            ctl_toggle_flip(*row);
             play_sound(6);
         } else if (*row == CTL_DEF) {
             ngb_bind_defaults();

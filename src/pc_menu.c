@@ -13,7 +13,8 @@
  *
  * The main menu's RECOMP SETTINGS (src/main_menu.c) opens this menu as
  * OPTIONS does, but on pages of ours: page 0's categories become
- * Graphics, Display and Startup Settings and Exit, opening pages 10-12 --
+ * Graphics, Display and Startup Settings, Gameplay, Cheats and Controls,
+ * opening pages 10-15 (no Exit row: the column has six, and B leaves) --
  * the recomp's settings as rows with values, like Video Settings' -- and
  * the header and category words are pictures of ours (src/pause_tab.c)
  * while it is open. The page and row tables and the text table are
@@ -48,18 +49,20 @@ int ngb_settings_size_count(int aspect);   /* src/launcher.c */
 void ngb_settings_size_at(int aspect, int i, int *w, int *h);
 
 #define MENU_STATE 0xDA41D0       /* the Options menu: page, row, ... */
-#define PAGE_GFX   10             /* ours: Graphics, Display, Startup Settings, Cheats */
+#define PAGE_GFX   10             /* ours: Graphics, Display, Startup Settings, Gameplay, Cheats */
 #define PAGE_DISP  11
 #define PAGE_START 12
-#define PAGE_CHEAT 13
-#define PAGE_CTRL  14             /* Controls: the bindings' panel (src/pause_tab.c) over it */
-#define N_OURS     5
+#define PAGE_GAME  13             /* Gameplay: the optional changes to play (the Quick Menu) */
+#define PAGE_CHEAT 14
+#define PAGE_CTRL  15             /* Controls: the bindings' panel (src/pause_tab.c) over it */
+#define N_OURS     6
 #define PC_RAISE   30             /* a page of more than seven rows: higher */
 #define PC_CLOSER  8              /* and closer, clear of the information line */
 
 enum { ROW_SCREEN, ROW_MOVIE, ROW_PC, ROW_DEFAULT, ROW_EXIT,
        ROW_RENDER, ROW_TEXTURE, ROW_SHADOW, ROW_DISPLAY, ROW_VSYNC, ROW_FPS, ROW_WINDOW, ROW_ASPECT, ROW_BACK,
        ROW_SKIP, ROW_LAUNCHER, ROW_MSAA, ROW_HEALTH, ROW_NINPO, ROW_ESSENCE, ROW_ALLDIFF, ROW_SCARABS, ROW_ALLCOST, ROW_EXTRACOST,
+       ROW_GLOW, ROW_QUICKFREEZE, ROW_QUICKSCALE, ROW_INFITEMS, ROW_INFAMMO,
 };
 
 static int is_ours(int page) { return page >= PAGE_GFX && page < PAGE_GFX + N_OURS; }
@@ -70,15 +73,17 @@ static int is_ours(int page) { return page >= PAGE_GFX && page < PAGE_GFX + N_OU
 /* (without the PC Settings row: the PC settings are in RECOMP SETTINGS only) */
 static const uint8_t s_rows_ws[] = { ROW_SCREEN, ROW_MOVIE, ROW_DEFAULT, ROW_EXIT };
 static const uint8_t s_rows_std[] = { ROW_SCREEN, ROW_EXIT };
-static const uint8_t s_rows_gfx[] = { ROW_RENDER, ROW_TEXTURE, ROW_MSAA, ROW_SHADOW, ROW_BACK };
+static const uint8_t s_rows_gfx[] = { ROW_RENDER, ROW_TEXTURE, ROW_MSAA, ROW_SHADOW, ROW_GLOW, ROW_BACK };
 static const uint8_t s_rows_disp[] = { ROW_ASPECT, ROW_WINDOW, ROW_DISPLAY, ROW_VSYNC, ROW_FPS, ROW_BACK };
 static const uint8_t s_rows_start[] = { ROW_SKIP, ROW_ALLDIFF, ROW_ALLCOST, ROW_BACK };
-static const uint8_t s_rows_cheat[] = { ROW_HEALTH, ROW_NINPO, ROW_ESSENCE, ROW_SCARABS, ROW_BACK };
+static const uint8_t s_rows_game[] = { ROW_QUICKSCALE, ROW_QUICKFREEZE, ROW_BACK };
+static const uint8_t s_rows_cheat[] = { ROW_HEALTH, ROW_NINPO, ROW_ESSENCE, ROW_SCARABS, ROW_INFITEMS, ROW_INFAMMO, ROW_BACK };
 static const uint8_t s_rows_ctrl[] = { ROW_BACK };
 static const struct { const uint8_t *kinds; int n; } s_ours[N_OURS] = {
     { s_rows_gfx, (int)sizeof s_rows_gfx },
     { s_rows_disp, (int)sizeof s_rows_disp },
     { s_rows_start, (int)sizeof s_rows_start },
+    { s_rows_game, (int)sizeof s_rows_game },
     { s_rows_cheat, (int)sizeof s_rows_cheat },
     { s_rows_ctrl, (int)sizeof s_rows_ctrl },
 };
@@ -86,6 +91,16 @@ static const struct { const uint8_t *kinds; int n; } s_ours[N_OURS] = {
 #define N_STD (int)sizeof s_rows_std
 
 /* New text, category 2 (the Options menu's). */
+#define T_QUICKFREEZE 0x201B7
+#define D_QUICKFREEZE 0x201B8
+#define D_GAMEPLAY 0x201B9            /* the category */
+#define T_INFITEMS 0x201BA            /* the cheats: infinite items, infinite projectiles */
+#define T_INFAMMO  0x201BB
+#define D_INFITEMS 0x201BC
+#define D_INFAMMO  0x201BD
+#define T_QUICKSCALE  0x201C0
+#define D_QUICKSCALE  0x201C1
+#define T_QUICKSCALE0 0x201C2        /* + 0..10: 100%, 90%, ... 10%, Off */
 #define T_PC       0x20100
 #define T_RENDER   0x20101
 #define T_TEXTURE  0x20102
@@ -145,16 +160,35 @@ static const struct { const uint8_t *kinds; int n; } s_ours[N_OURS] = {
 #define D_EXTRACOST 0x201AE
 #define T_EXTRA0   0x201B0            /* + 0..3: Game's Choice, Extra 1-3 */
 #define D_CONTROLS 0x201B4            /* the category */
+#define T_GLOW     0x201B5            /* Smoother Glow (src/d3d/vk/glow_options.h) */
+#define D_GLOW     0x201B6
 #define T_WINDOWSZ 0x2012A
 #define D_WINDOWSZ 0x2012B
 #define T_WSIZE0   0x20140            /* + aspect * 8 + index: "1280 x 720" */
 
 static const struct { uint32_t id; const char *text; } s_text[] = {
+    { T_QUICKFREEZE, "Quick Menu Pause" },
+    { T_QUICKSCALE, "Quick Menu" },
+    { D_QUICKSCALE, "A d-pad menu of weapons, Ninpo and items (Up and Down open it), at this size." },
+    { D_GAMEPLAY, "Optional changes to how the game plays, each off unless chosen." },
+    { T_INFITEMS, "Infinite Items" },
+    { T_INFAMMO,  "Infinite Projectiles" },
+    { D_INFITEMS, "Elixirs, rations and the Talisman of Rebirth are not used up. For this session only." },
+    { D_INFAMMO,  "Shuriken, smoke bombs, arrows and spears are not used up. For this session only." },
+    { T_QUICKSCALE0 + 0, "100%" }, { T_QUICKSCALE0 + 1, "90%" },
+    { T_QUICKSCALE0 + 2, "80%" }, { T_QUICKSCALE0 + 3, "70%" },
+    { T_QUICKSCALE0 + 4, "60%" }, { T_QUICKSCALE0 + 5, "50%" },
+    { T_QUICKSCALE0 + 6, "40%" }, { T_QUICKSCALE0 + 7, "30%" },
+    { T_QUICKSCALE0 + 8, "20%" }, { T_QUICKSCALE0 + 9, "10%" },
+    { T_QUICKSCALE0 + 10, "Off" },
+    { D_QUICKFREEZE, "The game pauses while the quick menu is open (once Ryu's action ends)." },
     { T_PC,      "PC Settings" },
     { T_RENDER,  "Render Resolution" },
     { T_TEXTURE, "Anisotropic Filtering" },
     { T_MSAA,    "Anti-Aliasing (MSAA)" },
     { D_MSAA,    "Smooths the edges of the 3D; 2x to 8x samples a pixel." },
+    { T_GLOW,    "Smoother Glow" },
+    { D_GLOW,    "A softer, fainter glow on bright lights. Off: the console's." },
     { T_ANISO0 + 0, "Off" }, { T_ANISO0 + 1, "2x" }, { T_ANISO0 + 2, "4x" },
     { T_ANISO0 + 3, "8x" }, { T_ANISO0 + 4, "16x" },
     { T_MSAA0 + 0, "Off" }, { T_MSAA0 + 1, "2x" }, { T_MSAA0 + 2, "4x" }, { T_MSAA0 + 3, "8x" },
@@ -193,7 +227,7 @@ static const struct { uint32_t id; const char *text; } s_text[] = {
     { T_NO,      "No" },
     { D_SKIP,    "Starts at the title screen, from the next start." },
     { D_LAUNCHER, "Shows the settings screen before the game, from the next start." },
-    { D_CAT0 + 0, "Render resolution, texture filtering and shadow detail." },
+    { D_CAT0 + 0, "Render resolution, texture filtering, anti-aliasing, shadows and the glow." },
     { D_CAT0 + 1, "Aspect ratio, window size, display mode, V-Sync and the FPS counter." },
     { D_CAT0 + 2, "What the game shows when it starts, and the difficulties New Game offers." },
     { D_BACK,    "Returns to the Recomp Settings screen." },
@@ -203,7 +237,7 @@ static const struct { uint32_t id; const char *text; } s_text[] = {
     { D_HEALTH,  "Ryu's health stays full. For this session only." },
     { D_NINPO,   "Ninpo is always ready. For this session only." },
     { D_ESSENCE, "As much essence as can be held. For this session only." },
-    { D_CHEATS,  "Help for a hard spot: health, ninpo and essence. Not saved." },
+    { D_CHEATS,  "Help for a hard spot: health, ninpo, essence, items and projectiles. Not saved." },
     { T_ALLDIFF, "All Difficulties" },
     { D_ALLDIFF, "Every difficulty at New Game, Ninja Dog to Master Ninja." },
     { T_SCARABS, "Golden Scarabs" },
@@ -254,6 +288,7 @@ static uint32_t make_rows(const uint8_t *kinds, int n)
         case ROW_WINDOW:  src = 0x429984; max = 6; break;
         case ROW_ASPECT:  src = 0x429984; max = 3; break;
         case ROW_EXTRACOST: src = 0x429984; max = 3; break;
+        case ROW_QUICKSCALE: src = 0x429984; max = 10; break;
         default:          src = 0x429984; break;          /* a value, 0-1 */
         }
         memcpy((void *)XBOX_PTR(e), (void *)XBOX_PTR(src), 0x1C);
@@ -271,7 +306,8 @@ static uint32_t make_labels(const uint8_t *kinds, int n)
     static const uint32_t id[] = { 0x20011, 0x20015, T_PC, 0x20004, 0x20005,
                                    T_RENDER, T_TEXTURE, T_SHADOW, T_DISPLAY, T_VSYNC,
                                    T_FPS, T_WINDOWSZ, T_ASPECT, 0x20005, T_SKIP, T_LAUNCHER, T_MSAA,
-                                   T_HEALTH, T_NINPO, T_ESSENCE, T_ALLDIFF, T_SCARABS, T_ALLCOST, T_EXTRACOST };
+                                   T_HEALTH, T_NINPO, T_ESSENCE, T_ALLDIFF, T_SCARABS, T_ALLCOST, T_EXTRACOST,
+                                   T_GLOW, T_QUICKFREEZE, T_QUICKSCALE, T_INFITEMS, T_INFAMMO };
     uint32_t va = xbox_HeapAlloc(4 * n, 4);
     for (int i = 0; i < n; i++)
         MEM32(va + 4 * i) = id[kinds[i]];
@@ -321,22 +357,22 @@ static void pc_menu_init(void)
 
     /* RECOMP SETTINGS' page table: the game's (0x429CB8: pages 0-9 of 0x18
      * bytes, then 0xFF) with page 0's categories ours -- rows opening pages
-     * 10-12, and Exit -- and our pages 10-12, copies of Screen Adjustment's
+     * 10-15, no Exit -- and our pages 10-15, copies of Screen Adjustment's
      * (page 9: a page of Video Settings) going back to their category. */
     uint32_t pages = xbox_HeapAlloc(0x18 * (10 + N_OURS + 1), 4);
     memcpy((void *)XBOX_PTR(pages), (void *)XBOX_PTR(0x429CB8), 0x18 * 10);
     {
-        uint32_t src = MEM32(0x429CB8 + 0xC), rows = xbox_HeapAlloc(0x1C * (N_OURS + 2), 4);
-        for (int i = 0; i <= N_OURS; i++) {               /* page 0's rows: a category's, Exit's last */
-            uint32_t e = rows + 0x1C * i;
-            memcpy((void *)XBOX_PTR(e), (void *)XBOX_PTR(src + 0x1C * (i < N_OURS ? i : 5)), 0x1C);
+        uint32_t src = MEM32(0x429CB8 + 0xC), rows = xbox_HeapAlloc(0x1C * (N_OURS + 1), 4);
+        for (int i = 0; i < N_OURS; i++) {                /* page 0's rows: each a category's (the game's */
+            uint32_t e = rows + 0x1C * i;                  /* first five; the sixth as the fifth, not Exit) */
+            memcpy((void *)XBOX_PTR(e), (void *)XBOX_PTR(src + 0x1C * (i < 5 ? i : 4)), 0x1C);
             MEM8(e) = (uint8_t)i;
-            MEM8(e + 1) = i < N_OURS ? (uint8_t)(PAGE_GFX + i) : 0xFD;
+            MEM8(e + 1) = (uint8_t)(PAGE_GFX + i);
         }
-        memset((void *)XBOX_PTR(rows + 0x1C * (N_OURS + 1)), 0, 0x1C);
-        MEM8(rows + 0x1C * (N_OURS + 1)) = 0xFF;
+        memset((void *)XBOX_PTR(rows + 0x1C * N_OURS), 0, 0x1C);
+        MEM8(rows + 0x1C * N_OURS) = 0xFF;
         MEM32(pages + 0xC) = rows;
-        MEM8(pages + 2) = N_OURS;                          /* the last row */
+        MEM8(pages + 2) = N_OURS - 1;                      /* the last row */
     }
     for (int i = 0; i < N_OURS; i++) {
         uint32_t pg = pages + 0x18 * (10 + i);
@@ -441,6 +477,7 @@ void ngb_movie_playing(int playing)
     if (playing)
         s_boot = 0;
 }
+int ngb_movie_active(void) { return s_movie_ms && now_ms() - s_movie_ms < 200; }
 void ngb_boot_over(void) { s_boot = 0; }   /* the title is up */
 
 /* NGB_MENUS_43=1: on a wide screen the 2D screens in the game's 4:3 mode too, the console's 4:3 picture
@@ -638,6 +675,8 @@ static int row_kind(int row)
 static uint32_t pc_value_id(int row, uint32_t movie_id)
 {
     switch (row_kind(row)) {
+    case ROW_QUICKFREEZE: return ngb_pc_setting(19) ? T_ON : T_OFF;
+    case ROW_QUICKSCALE: return T_QUICKSCALE0 + (uint32_t)((100 - ngb_pc_setting(20)) / 10);
     case ROW_MOVIE:   return movie_id;
     case ROW_RENDER:  return T_SCALE0 + (uint32_t)(ngb_pc_setting(0) - 1);
     case ROW_TEXTURE: {
@@ -668,6 +707,9 @@ static uint32_t pc_value_id(int row, uint32_t movie_id)
     case ROW_ALLDIFF: return ngb_pc_setting(14) ? T_YES : T_NO;
     case ROW_SCARABS: return ngb_pc_setting(15) ? T_ON : T_OFF;
     case ROW_ALLCOST: return ngb_pc_setting(16) ? T_YES : T_NO;
+    case ROW_GLOW:    return ngb_pc_setting(18) ? T_ON : T_OFF;
+    case ROW_INFITEMS: return ngb_pc_setting(21) ? T_ON : T_OFF;
+    case ROW_INFAMMO: return ngb_pc_setting(22) ? T_ON : T_OFF;
     default:          return 0;
     }
 }
@@ -678,11 +720,13 @@ static int pc_value_change(int row, int delta)
 {
     int kind = row_kind(row);
     int step = delta > 0 ? 1 : -1;
-    if ((kind < ROW_RENDER || kind > ROW_ASPECT) && (kind < ROW_SKIP || kind > ROW_EXTRACOST))
+    if ((kind < ROW_RENDER || kind > ROW_ASPECT) && (kind < ROW_SKIP || kind > ROW_INFAMMO))
         return 0;
     if (!delta)
         return 1;
     switch (kind) {
+    case ROW_QUICKFREEZE: ngb_pc_set_setting(19, !ngb_pc_setting(19)); break;
+    case ROW_QUICKSCALE: ngb_pc_set_setting(20, ngb_quick_scale_step(ngb_pc_setting(20), step)); break;
     case ROW_RENDER: {
         int v = ngb_pc_setting(0) + step;
         ngb_pc_set_setting(0, v < 1 ? 10 : v > 10 ? 1 : v);
@@ -717,6 +761,9 @@ static int pc_value_change(int row, int delta)
     case ROW_ALLDIFF: ngb_pc_set_setting(14, !ngb_pc_setting(14)); break;
     case ROW_SCARABS: ngb_pc_set_setting(15, !ngb_pc_setting(15)); break;
     case ROW_ALLCOST: ngb_pc_set_setting(16, !ngb_pc_setting(16)); break;
+    case ROW_GLOW:    ngb_pc_set_setting(18, !ngb_pc_setting(18)); break;
+    case ROW_INFITEMS: ngb_pc_set_setting(21, !ngb_pc_setting(21)); break;
+    case ROW_INFAMMO: ngb_pc_set_setting(22, !ngb_pc_setting(22)); break;
     case ROW_HEALTH:
     case ROW_NINPO:
     case ROW_ESSENCE: {
@@ -1797,7 +1844,9 @@ void sub_00220870(void)
                                            D_SKIP & 0xFFFF, D_LAUNCHER & 0xFFFF, D_MSAA & 0xFFFF,
                                            D_HEALTH & 0xFFFF, D_NINPO & 0xFFFF, D_ESSENCE & 0xFFFF,
                                            D_ALLDIFF & 0xFFFF, D_SCARABS & 0xFFFF, D_ALLCOST & 0xFFFF,
-                                           D_EXTRACOST & 0xFFFF };
+                                           D_EXTRACOST & 0xFFFF, D_GLOW & 0xFFFF,
+                                           D_QUICKFREEZE & 0xFFFF, D_QUICKSCALE & 0xFFFF,
+                                           D_INFITEMS & 0xFFFF, D_INFAMMO & 0xFFFF };
     RECOMP_ENTRY(0x00220870u);
     uint32_t out = ecx;
     uint32_t level = MEM16(0x8DE430), tab = MEM16(0x8DE4CC), row = MEM16(0x8DE468);
@@ -1822,6 +1871,7 @@ void sub_00220870(void)
             id = video_kind[kind];
     } else if (s_recomp && level == 0) {                /* RECOMP SETTINGS' categories */
         id = tab == PAGE_CHEAT - PAGE_GFX ? (uint16_t)(D_CHEATS & 0xFFFF)
+           : tab == PAGE_GAME - PAGE_GFX ? (uint16_t)(D_GAMEPLAY & 0xFFFF)
            : tab == PAGE_CTRL - PAGE_GFX ? (uint16_t)(D_CONTROLS & 0xFFFF)
            : tab < N_OURS ? (uint16_t)((D_CAT0 + tab) & 0xFFFF) : 0x36;
     } else if (level == 0) {

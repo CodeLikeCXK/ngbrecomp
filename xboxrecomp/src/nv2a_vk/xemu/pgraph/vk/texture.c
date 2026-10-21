@@ -1298,6 +1298,14 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
 
     uint32_t filter =
         pgraph_reg_r(pg, NV_PGRAPH_TEXFILTER0 + texture_idx * 4);
+    if (state.bump_signed && getenv("NV2A_BUMP_FILTER_LOG")) {   /* #16: how the hardware is told to read the ripple map */
+        static int n;
+        if (n++ < 6)
+            fprintf(stderr, "[TEX] bump stage %d filter %08X (lod bias %03X min %u mag %u) levels %u mip clamp %u..%u ctl0 %08X\n",
+                    texture_idx, filter, filter & 0x1FFF, GET_MASK(filter, NV_PGRAPH_TEXFILTER0_MIN),
+                    GET_MASK(filter, NV_PGRAPH_TEXFILTER0_MAG), state.levels, state.min_mipmap_level,
+                    state.max_mipmap_level, pgraph_reg_r(pg, NV_PGRAPH_TEXCTL0_0 + texture_idx * 4));
+    }
     uint32_t address =
         pgraph_reg_r(pg, NV_PGRAPH_TEXADDRESS0 + texture_idx * 4);
     uint32_t border_color_pack32 =

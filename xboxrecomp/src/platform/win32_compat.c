@@ -909,15 +909,45 @@ BOOL GetExitCodeThread(HANDLE h, LPDWORD exitCode)
 #define SIG_SUSPEND (SIGRTMIN + 3)
 #endif
 
+/* The last suspensions and resumes, for a hang's diagnosis (compat_suspend_dump, from the USR1
+ * sample): a few stores each, nothing written until asked. ops: S suspend, R resume, P parked, W woke. */
+typedef struct { int64_t us; const void *target, *by; char op; int count; int parked, pending; } susp_event;
+static susp_event s_susp_ring[64];
+static unsigned s_susp_next;
+static void susp_note(char op, w32_object *o, int count)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    unsigned i = __atomic_fetch_add(&s_susp_next, 1, __ATOMIC_RELAXED) % 64;
+    susp_event e = { (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000, o, t_self_obj, op, count,
+                     __atomic_load_n(&o->parked, __ATOMIC_RELAXED), o->park_pending };
+    s_susp_ring[i] = e;
+}
+
+void compat_suspend_dump(void)
+{
+    unsigned n = __atomic_load_n(&s_susp_next, __ATOMIC_RELAXED);
+    unsigned k = n < 64 ? n : 64;
+    int64_t last = k ? s_susp_ring[(n - 1) % 64].us : 0;
+    fprintf(stderr, "[SUSPEND] the last %u of %u suspensions and resumes (newest last; t ms before the newest):\n", k, n);
+    for (unsigned j = n - k; j < n; j++) {
+        const susp_event *e = &s_susp_ring[j % 64];
+        fprintf(stderr, "[SUSPEND] t-%7.1f %c thread %p by %p: count after %d, parked %d, pending %d\n",
+                (last - e->us) / 1000.0, e->op, e->target, e->by, e->count, e->parked, e->pending);
+    }
+}
+
 static void park_now(w32_object *o)
 {
     o->park_pending = 0;
     __atomic_store_n(&o->parked, 1, __ATOMIC_SEQ_CST);
+    susp_note('P', o, __atomic_load_n(&o->suspend_count, __ATOMIC_SEQ_CST));
     vcpu_block_begin();
     while (__atomic_load_n(&o->suspend_count, __ATOMIC_SEQ_CST) > 0)
         while (host_sem_wait(&o->park_sem) != 0 && errno == EINTR)
             ;
     __atomic_store_n(&o->parked, 0, __ATOMIC_SEQ_CST);
+    susp_note('W', o, __atomic_load_n(&o->suspend_count, __ATOMIC_SEQ_CST));
     vcpu_block_end();
 }
 
@@ -1027,6 +1057,7 @@ DWORD ResumeThread(HANDLE h)
         if (__atomic_load_n(&o->parked, __ATOMIC_SEQ_CST))
             host_sem_post(&o->park_sem);
     }
+    susp_note('R', o, (int)__atomic_load_n(&o->suspend_count, __ATOMIC_SEQ_CST));
     pthread_mutex_unlock(&o->lock);
     return prev;
 }
@@ -1040,6 +1071,7 @@ DWORD SuspendThread(HANDLE h)
     pthread_mutex_lock(&o->lock);
     DWORD prev = (DWORD)__atomic_fetch_add(&o->suspend_count, 1, __ATOMIC_SEQ_CST);
     int running = o->started && !o->exited;
+    susp_note('S', o, (int)prev + 1);
     pthread_mutex_unlock(&o->lock);
 
     if (prev == 0 && running) {

@@ -103,6 +103,42 @@ void pgraph_glsl_set_psh_state(PGRAPHState *pg, PshState *state)
             pgraph_reg_r(pg, NV_PGRAPH_COMBINEALPHAO0 + i * 4);
     }
 
+    if (getenv("NV2A_PSC_LOG")) {   /* #29: each combiner setup's constants, once, to compare with the D3D renderer's */
+        static uint32_t seen[64];
+        static int n;
+        uint32_t key = pgraph_reg_r(pg, NV_PGRAPH_COMBINECOLORI0) * 31 + pgraph_reg_r(pg, NV_PGRAPH_COMBINEFACTOR0) * 7 +
+                       pgraph_reg_r(pg, NV_PGRAPH_COMBINECTL);
+        int k = 0;
+        while (k < n && seen[k] != key) k++;
+        if (k == n && n < 64) {
+            seen[n++] = key;
+            fprintf(stderr, "[PSH] consts: stage0 rgb in %08X out %08X ctl %08X c0 %08X %08X c1 %08X %08X final %08X %08X\n",
+                    pgraph_reg_r(pg, NV_PGRAPH_COMBINECOLORI0), pgraph_reg_r(pg, NV_PGRAPH_COMBINECOLORO0),
+                    pgraph_reg_r(pg, NV_PGRAPH_COMBINECTL), pgraph_reg_r(pg, NV_PGRAPH_COMBINEFACTOR0),
+                    pgraph_reg_r(pg, NV_PGRAPH_COMBINEFACTOR0 + 4), pgraph_reg_r(pg, NV_PGRAPH_COMBINEFACTOR1),
+                    pgraph_reg_r(pg, NV_PGRAPH_COMBINEFACTOR1 + 4), pgraph_reg_r(pg, NV_PGRAPH_SPECFOGFACTOR0),
+                    pgraph_reg_r(pg, NV_PGRAPH_SPECFOGFACTOR1));
+        }
+    }
+    if (state->point_sprite && getenv("NV2A_SPRITE_LOG")) {   /* #51: what a point sprite's combiners read */
+        static uint64_t seen[32];
+        static int n;
+        uint64_t key = state->shader_stage_program ^ (uint64_t)state->combiner_control << 32;
+        for (int i = 0; i < num_stages; i++) key = key * 131 + state->rgb_inputs[i] * 7 + state->alpha_inputs[i];
+        int k = 0;
+        while (k < n && seen[k] != key) k++;
+        if (k == n && n < 32) {
+            seen[n++] = key;
+            fprintf(stderr, "[PSH] sprite: stage program %08X combinectl %08X final %08X %08X tex enabled", state->shader_stage_program,
+                    state->combiner_control, state->final_inputs_0, state->final_inputs_1);
+            for (int i = 0; i < 4; i++)
+                fprintf(stderr, " %d", (pgraph_reg_r(pg, NV_PGRAPH_TEXCTL0_0 + i * 4) & NV_PGRAPH_TEXCTL0_0_ENABLE) ? 1 : 0);
+            for (int i = 0; i < num_stages; i++)
+                fprintf(stderr, " | %d rgb %08X>%08X a %08X>%08X", i, state->rgb_inputs[i], state->rgb_outputs[i],
+                        state->alpha_inputs[i], state->alpha_outputs[i]);
+            fprintf(stderr, "\n");
+        }
+    }
     if (getenv("NV2A_BUMP_LOG")) {                /* each distinct set of stage modes and formats */
         static uint64_t seen[64];
         static int n;

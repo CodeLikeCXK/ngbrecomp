@@ -176,6 +176,8 @@ int   compat_is_thread(HANDLE h);
 void compat_park_if_pending(void);
 /* The threads CreateThread started and that are still running. */
 int  compat_thread_list(pthread_t *out, int max);
+/* The last suspensions and resumes, to stderr (diagnostics: the USR1 sample). */
+void compat_suspend_dump(void);
 
 HANDLE CreateThread(LPSECURITY_ATTRIBUTES sa, SIZE_T stackSize,
                     LPTHREAD_START_ROUTINE start, LPVOID param,

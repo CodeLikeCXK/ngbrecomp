@@ -5,19 +5,24 @@
 #include <bit>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace gpu {
 
 namespace {
 
+// printf into a string of whatever length it takes (a fixed buffer cut the bump helpers short, silently)
 std::string F(const char* fmt, ...) {
-    char buf[1024];
-    va_list ap;
+    va_list ap, ap2;
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_copy(ap2, ap);
+    int n = vsnprintf(nullptr, 0, fmt, ap);
     va_end(ap);
-    return buf;
+    std::string out(n > 0 ? size_t(n) : 0, '\0');
+    if (n > 0) vsnprintf(out.data(), size_t(n) + 1, fmt, ap2);
+    va_end(ap2);
+    return out;
 }
 
 const char* kCommonHead = R"(
@@ -93,7 +98,11 @@ float4 ilu_lit(float4 s) {
     float spec = exp2(clamp(s.w, -cap, cap) * log2(max(s.y, 0)));
     return float4(1, diffuse, diffuse > 0 ? spec : 0, 1);
 }
+// fogp.w: D3DRS_FOGTABLEMODE (0 none, 1 exp, 2 exp2, 3 linear), 4 a vertex program's own factor (fog on and
+// table mode none: its oFog.x is the factor itself, as xemu's register model shows -- linear with parameters
+// 1 and 1 -- the chapter 7 pool's blue haze, #16), 0 no fog
 float fogfactor(float d) {
+    if (fogp.w == 4) return d;
     if (fogp.w == 3) return (fogp.y - d) / (fogp.y - fogp.x);
     if (fogp.w == 1) return exp(-d * fogp.z);
     if (fogp.w == 2) return exp(-(d * fogp.z) * (d * fogp.z));
@@ -393,13 +402,20 @@ std::string TexFetch(const PixelKey& k, int i) {
     const std::string tc = F("tc%d", i);
     const char* q = tc.c_str();
     std::string norm = (t.rect ? F(" / texsize[%d].xy", i) : "") + F(" + texsize[%d].zw", i);
-    auto put = [&](const std::string& v) { return F("float4 t%d = %s;\n", i, v.c_str()); };
+    std::string uv2d;   // the last 2D sample's coordinates, for a bump map's decoded fetch
+    auto put = [&](const std::string& v) {
+        std::string r = F("float4 t%d = %s;\n", i, v.c_str());
+        if ((t.flags & kTexSigned) && !uv2d.empty())   // a bump map: its du dv, each texel decoded first (bumpduv)
+            r += F("float2 duv%d = bumpduv%d(%s);\n", i, i, uv2d.c_str());
+        return r;
+    };
     // dpN, or dpNn for stage N + 1's product taken early
     auto dp = [&](int n, int coord, uint32_t map, uint32_t src) {
         return F("float dp%d%s = dot(tc%d.xyz, %s);\n", n, coord == n ? "" : "n", coord, DotInput(map, src).c_str());
     };
     auto tex2d = [&](const std::string& uv) {
-        if (t.flags & kTexWide) return F("spreadtap(tex%d, smp%d, %s, spread[%d], %s)", i, i, uv.c_str(), i, Hooks().ReadScale(t).c_str());
+        uv2d = uv;
+        if (t.flags & kTexWide) return F("spreadtap%d(%s, spread[%d], %s)", i, uv.c_str(), i, Hooks().ReadScale(t).c_str());
         return F("tex%d.Sample(smp%d, %s)", i, i, uv.c_str());
     };
     auto cube = [&](const std::string& dir) {
@@ -419,8 +435,7 @@ std::string TexFetch(const PixelKey& k, int i) {
         return std::string("float4(0,0,0,1)");
     };
     auto depth = [&](const std::string& ref) {
-        return put(F("shadow(tex%d, smp%d, (%s.xy / %s.w)%s, %s, %d, i.pos.xy, texsize[%d].xy)", i, i, q, q, norm.c_str(), ref.c_str(),
-                     t.shadow, i));
+        return put(F("shadow%d((%s.xy / %s.w)%s, %s, %d, i.pos.xy, texsize[%d].xy)", i, q, q, norm.c_str(), ref.c_str(), t.shadow, i));
     };
     std::string s;
     switch (mode) {
@@ -436,7 +451,7 @@ std::string TexFetch(const PixelKey& k, int i) {
             return s;
         case 6:
         case 7:  // bump env map: signed du dv through the 2x2 matrix, 7 scales by luminance
-            s = (k.tex[in].flags & kTexSigned) ? F("float2 duv%d = max((t%u.bg * 255 - 128) / 127, -1);\n", i, in)
+            s = (k.tex[in].flags & kTexSigned) ? F("float2 duv%d = duv%u;\n", i, in)
                                                : F("float2 duv%d = sbyte(t%u.bgr, 0, 256, 127).xy;\n", i, in);
             s += put(sample2(F("%s.xy + float2(dot(bumpmat[%d].xz, duv%d), dot(bumpmat[%d].yw, duv%d))", q, i, i, i, i)));
             if (mode == 7) s += F("t%d *= bumplum[%d].x * t%u.r + bumplum[%d].y;\n", i, i, in, i);
@@ -465,17 +480,7 @@ const char* kPsSbyte = R"(
 // unorm to byte b, less lo under 128 or hi from 128, over d
 float3 sbyte(float3 u, float lo, float hi, float d) { float3 b = u * 255; return (b - (b >= 128 ? hi : lo)) / d; }
 )";
-const char* kPsTail = R"(float4 spreadtap(Texture2D t, SamplerState s, float2 uv, float4 w, float m) {
-    float4 c = 0;
-    int n = (int)w.z;
-    for (int y = 0; y < n; y++)
-        for (int x = 0; x < n; x++) {
-            float4 v = t.SampleLevel(s, uv + w.xy * (float2(x, y) - (n - 1) * 0.5), 0);
-            c += float4(saturate(v.rgb * m), v.a);
-        }
-    return c / (n * n);
-}
-void alphatest(float a) {
+const char* kPsTail = R"(void alphatest(float a) {
     int f = (int)misc.y;
     int v = (int)round(a * 255), r = (int)misc.x;
     bool ok = f == 0 ? false : f == 1 ? v < r : f == 2 ? v == r : f == 3 ? v <= r : f == 4 ? v > r : f == 5 ? v != r : f == 6 ? v >= r : true;
@@ -483,7 +488,21 @@ void alphatest(float a) {
 }
 )";
 
-std::string PsHelpers() { return kPsSbyte + Hooks().Shadow() + kPsTail; }
+std::string PsHelpers() { return std::string(kPsSbyte) + kPsTail; }
+
+// stage i's texture read n x n taps wide (a render target drawn at a scale, read at the console's)
+std::string SpreadTap(int i) {
+    return F("float4 spreadtap%d(float2 uv, float4 w, float m) {\n"
+             "    float4 c = 0;\n"
+             "    int n = (int)w.z;\n"
+             "    for (int y = 0; y < n; y++)\n"
+             "        for (int x = 0; x < n; x++) {\n"
+             "            float4 v = tex%d.SampleLevel(smp%d, uv + w.xy * (float2(x, y) - (n - 1) * 0.5), 0);\n"
+             "            c += float4(saturate(v.rgb * m), v.a);\n"
+             "        }\n"
+             "    return c / (n * n);\n"
+             "}\n", i, i, i);
+}
 
 // fixed function texture stage arguments, D3DTA
 std::string FfArg(uint32_t a, int stage, bool alpha) {
@@ -538,13 +557,12 @@ bool PixelKey::operator==(const PixelKey& o) const { return std::memcmp(this, &o
 
 std::string ShaderHooks::Constants() const { return "    float4 ext;\n"; }
 
-std::string ShaderHooks::Shadow() const {
-    return R"(// the sampler compares, a linear filter blends the four results like the console does
-float4 shadow(Texture2D<float> t, SamplerComparisonState s, float2 uv, float z, int fmt, float2 px, float2 size) {
-    float mx = fmt == 2 ? 65535.0 : 16777215.0;
-    return t.SampleCmpLevelZero(s, uv, clamp(z, 0, mx) / mx).xxxx;
-}
-)";
+std::string ShaderHooks::Shadow(int i) const {
+    return F("// the sampler compares, a linear filter blends the four results like the console does\n"
+             "float4 shadow%d(float2 uv, float z, int fmt, float2 px, float2 size) {\n"
+             "    float mx = fmt == 2 ? 65535.0 : 16777215.0;\n"
+             "    return tex%d.SampleCmpLevelZero(smp%d, uv, clamp(z, 0, mx) / mx).xxxx;\n"
+             "}\n", i, i, i);
 }
 
 std::string ShaderHooks::Output() const { return "outc.rgb = saturate(outc.rgb);\n"; }
@@ -827,6 +845,52 @@ std::string PixelHlsl(const PixelKey& k) {
         const char* type = t.shadow ? "Texture2D<float>" : t.kind == kTex3D ? "Texture3D" : t.kind == kTexCube ? "TextureCube" : "Texture2D";
         s += F("%s tex%d : register(t%d);\n%s smp%d : register(s%d);\n", type, i, i, t.shadow ? "SamplerComparisonState" : "SamplerState", i, i);
     }
+    // The helpers that read a texture, one per stage naming its texture and sampler: passed as parameters
+    // instead, glslang copies them into the call (an OpStore of an image: invalid SPIR-V, the validation
+    // layer's VUID 06924, which a driver may take literally).
+    for (int i = 0; i < 4; i++) {
+        const TexInfo& t = k.tex[i];
+        if (t.shadow) s += Hooks().Shadow(i);
+        else if (t.kind == kTex2D && (t.flags & kTexWide)) s += SpreadTap(i);
+    }
+    for (int i = 0; i < 4; i++) {
+        if (!(k.tex[i].flags & kTexSigned) || k.tex[i].kind != kTex2D) continue;
+        // NGB_D3D_BUMPLEVEL=n (debugging): the ripple texture read at level n everywhere, to see each level's texels
+        static const char* force = std::getenv("NGB_D3D_BUMPLEVEL");
+        // the level the console's sampler would read: the computed one plus the stage's bias, from its most
+        // detailed level on (bumplum[].zw; the pond's -16 keeps it on the top level, the only one it fills)
+        std::string lod = force ? std::string(force)
+                                : F("max(tex%d.CalculateLevelOfDetailUnclamped(smp%d, uv) + bumplum[%d].z, bumplum[%d].w)", i, i, i, i);
+        // A bump map's du dv (V8U8: two signed bytes a texel). The texels are read whole and each decoded
+        // before the filtering: filtered as the unsigned bytes they are stored as, two texels either side
+        // of zero blend through the wrong range. Bilinear within the level the sampler would pick, linear
+        // on to the next, and wrapping, as the ripple maps tile.
+        s += F("float2 bumptexel%d(int2 p, int2 dim, int level) {\n"
+               "    p = (p %% dim + dim) %% dim;\n"
+               "    float2 b = tex%d.Load(int3(p, level)).bg * 255;\n"
+               "    return max((b - (b >= 128 ? 256 : 0)) / 127, -1);\n"
+               "}\n"
+               "float2 bumplevel%d(float2 uv, int level) {\n"
+               "    uint w, h, n;\n"
+               "    tex%d.GetDimensions(0, w, h, n);\n"
+               "    int2 dim = max(int2(w, h) >> level, 1);\n"
+               "    float2 p = uv * dim - 0.5;\n"
+               "    int2 i0 = int2(floor(p));\n"
+               "    float2 f = p - floor(p);\n"
+               "    float2 a = bumptexel%d(i0, dim, level), b = bumptexel%d(i0 + int2(1, 0), dim, level);\n"
+               "    float2 c = bumptexel%d(i0 + int2(0, 1), dim, level), d = bumptexel%d(i0 + int2(1, 1), dim, level);\n"
+               "    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y);\n"
+               "}\n"
+               "float2 bumpduv%d(float2 uv) {\n"
+               "    uint w, h, n;\n"
+               "    tex%d.GetDimensions(0, w, h, n);\n"
+               "    float lod = clamp(%s, 0, float(n) - 1);\n"
+               "    int l0 = int(floor(lod));\n"
+               "    float2 r = bumplevel%d(uv, l0);\n"
+               "    if (lod > l0) r = lerp(r, bumplevel%d(uv, min(l0 + 1, int(n) - 1)), lod - l0);\n"
+               "    return r;\n"
+               "}\n", i, i, i, i, i, i, i, i, i, i, lod.c_str(), i, i);
+    }
     s += F("float4 main(VOut i, bool front : SV_IsFrontFace) : SV_Target {\n");
     s += "    float4 tc0 = i.tc0, tc1 = i.tc1, tc2 = i.tc2, tc3 = i.tc3;\n";
     s += k.two_sided ? "    float4 v0 = front ? i.d0 : i.b0, v1 = front ? i.d1 : i.b1;\n" : "    float4 v0 = i.d0, v1 = i.d1;\n";
@@ -874,7 +938,11 @@ std::string PixelHlsl(const PixelKey& k) {
         }
     } else {
         body += "float4 cur = v0, tmp = 0;\n";
-        for (int i = 0; i < 4; i++) {
+        // A point sprite is stage 3 alone: the console makes the point's coordinates for that stage only
+        // (xemu's pT3), and its D3D builds the combiners from that stage's state, on the vertex colour --
+        // the attract demo's Ninpo sparks are one combiner, v0 x t3, with a MODULATE2X of a render target
+        // left in stage 0 not read at all. The torch embers keep their 16x16 spark there too (#51).
+        for (int i = k.sprite ? 3 : 0; i < 4; i++) {
             const uint32_t* f = k.ff[i];
             if (f[0] <= 1) break;
             const TexInfo& t = k.tex[i];
@@ -899,10 +967,10 @@ std::string PixelHlsl(const PixelKey& k) {
             std::string uv = (k.proj >> i) & 1 ? F("(tc%d.xy / tc%d.w)%s", i, i, norm.c_str()) : F("tc%d.xy%s", i, norm.c_str());
             std::string cube;
             if (t.shadow)
-                body += F("float4 t%d = shadow(tex%d, smp%d, (tc%d.xy / tc%d.w)%s, tc%d.z / tc%d.w, %d, i.pos.xy, texsize[%d].xy);\n", i, i,
-                          i, i, i, norm.c_str(), i, i, t.shadow, i);
+                body += F("float4 t%d = shadow%d((tc%d.xy / tc%d.w)%s, tc%d.z / tc%d.w, %d, i.pos.xy, texsize[%d].xy);\n", i, i, i, i,
+                          norm.c_str(), i, i, t.shadow, i);
             else if (t.kind == kTex2D && (t.flags & kTexWide))
-                body += F("float4 t%d = spreadtap(tex%d, smp%d, %s, spread[%d], %s);\n", i, i, i, uv.c_str(), i, Hooks().ReadScale(t).c_str());
+                body += F("float4 t%d = spreadtap%d(%s, spread[%d], %s);\n", i, i, uv.c_str(), i, Hooks().ReadScale(t).c_str());
             else if (t.kind == kTex2D) body += F("float4 t%d = tex%d.Sample(smp%d, %s);\n", i, i, i, uv.c_str());
             else if (t.kind == kTexCube && !(cube = Hooks().Cube(t, i, F("tc%d.xyz", i))).empty()) body += F("float4 t%d = %s;\n", i, cube.c_str());
             else if (t.kind) body += F("float4 t%d = tex%d.Sample(smp%d, tc%d.xyz);\n", i, i, i, i);
@@ -943,12 +1011,20 @@ std::string PointHlsl(std::string s, int kind) {
             size += "    if (c[190].w != 0) psz *= c[191].w * rsqrt(max(c[191].x + c[191].y * length(vp) + c[191].z * dot(vp, vp), 1e-20));\n";
         size += "    psz = clamp(psz, c[190].y, c[190].z);\n";
     }
-    size += "    o.psize = max(psz * surf.w, 1);\n    o.ptc = float4(p.xy * surf.w, o.psize, 0);\n";
-    put("    o.fogamt = fogfactor(oFog.x);\n    return o;\n", size, true);
+    // the centre in the console's pixels (half a pixel in, as the vertex epilogue puts it), from the position
+    // as it goes out: fixed function has no p
+    size += "    float2 pc = float2((o.pos.x / o.pos.w + 1) * surf.x * 0.5, (1 - o.pos.y / o.pos.w) * surf.y * 0.5);\n";
+    size += "    o.psize = max(psz * surf.w, 1);\n    o.ptc = float4(pc * surf.w, o.psize, 0);\n";
+    // before main's return, whatever comes ahead of it: the fog line differs (fixed function fog from the
+    // depth, #51's torch embers), and anchored on one form the size went unwritten -- a point with no size
+    // (validation VUID 08773), not drawn at all
+    size_t r = s.rfind("    return o;\n");
+    if (r != std::string::npos) s.insert(r, size);
     return s;
 }
 
-// A point sprite's pixel shader: every stage's coordinates run 0 to 1 across the point, top left first.
+// A point sprite's pixel shader: stage 3's coordinates run 0 to 1 across the point, top left first; the
+// other stages keep the vertex's, as on the console (xemu: pT3 = gl_PointCoord).
 std::string SpriteHlsl(std::string s) {
     size_t i = s.find("    float fogamt : TEXCOORD4;\n");
     if (i != std::string::npos) s.insert(i + std::strlen("    float fogamt : TEXCOORD4;\n"), "    float4 ptc : TEXCOORD5;\n");
@@ -956,7 +1032,7 @@ std::string SpriteHlsl(std::string s) {
     i = s.find(tc);
     if (i != std::string::npos)
         s.replace(i, std::strlen(tc), "    float4 spr = float4((i.pos.xy - i.ptc.xy) / i.ptc.z + 0.5, 0, 1);\n"
-                                      "    float4 tc0 = spr, tc1 = spr, tc2 = spr, tc3 = spr;\n");
+                                      "    float4 tc0 = i.tc0, tc1 = i.tc1, tc2 = i.tc2, tc3 = spr;\n");
     return s;
 }
 

@@ -63,6 +63,19 @@ Driving and watching a headless run:
   frames and a small picture of each, in `~/ngb-trace-<n>` (`HOME` decides where).
 - `NGB_RENDERER=xemu`: xemu's hardware-accurate renderer instead of ours — the reference for "is this
   our bug or the game's".
+- Vulkan's validation layer: `VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation`,
+  `VK_LAYER_LOG_FILENAME=<file>`, `VK_LAYER_DEBUG_ACTION=VK_DBG_LAYER_ACTION_LOG_MSG`. Run it when a bug
+  shows on one vendor's GPUs only: AMD's driver tolerates things others do not. The headless gamescope's
+  own WSI layer adds swapchain and dma-buf messages that are not ours. The SPIR-V cache
+  (`$NV2A_SHADER_CACHE/d3d/spirv.bin`: an 8-byte `NGBD3DC1` header, then records of hash u64, word count
+  u32, words) can be split and checked offline with `spirv-val`.
+- At the title, the first Start can be ignored while it loads; on the main menu the cursor starts at
+  Load Game when saves exist. The recomp's own pause pages (Settings, Exit) read the host's keyboard, not
+  `RECOMP_PAD_LIVE`: a stray Start in play opens the pause menu and the pad cannot close it.
+- The attract demo plays out a little differently on every run: compare captures by what they show
+  (counts, colours over a region), not frame by frame against another run.
+- `NGB_CHEATS=1000` (infinite health) keeps a scripted walk alive; `NGB_D3D_SHADERDUMP=<dir>` writes every
+  shader made (file names match a trace's `shaders` field).
 - `NGB_MODE_LOG=2` (2D-screen decisions per frame), `NGB_HUD_GROUP_TRACE=1` (HUD placement),
   `NGB_MOUSE_LOG=1`, `NGB_MOVIE_LOG=1`.
 - `kill -USR1 <pid>`: the guest thread's backtrace and registers (not gdb: it swallows the

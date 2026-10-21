@@ -46,6 +46,59 @@ LGPL-2.1-or-later — extracted from xemu
   satisfies that.
 
 
+LGPL-2.1-or-later — xemu's NV2A GPU model and Vulkan renderer
+------------------------------------------------------------
+
+  https://github.com/xemu-project/xemu (hw/xbox/nv2a)
+
+  src/nv2a_vk/xemu/ holds xemu's NV2A model, imported verbatim and then
+  extended for xboxrecomp (render scale, shadow-map scale, shader and
+  pipeline caches, frame pacing): the hardware blocks (pfifo.c, pgraph,
+  ptimer.c, pcrtc.c, pfb.c, pmc.c, pramdac.c, pvideo.c and the others), the
+  graphics engine in pgraph/, its Vulkan renderer in pgraph/vk/ and its
+  shader generators in pgraph/glsl/. Each file keeps its own header; the
+  copyrights they carry are those of espes (2012-2015), Jannik Vogel
+  (2014-2015), Matt Borgerson (2018-2025), with Aaron Robinson (2004),
+  _SF_ (2003), Shadow_tj and PatrickvL (2007) and the Nouveau Project
+  (2007-2010) in some.
+
+  Licensed under the GNU Lesser General Public License, version 2.1 or (at
+  your option) any later version (LICENSES/LGPL-2.1.txt, and
+  src/nv2a_vk/xemu/COPYING.LIB), except the files below.
+
+  pgraph/vk/texpack.c and trace.h are xboxrecomp's own additions.
+
+
+GPL-2.0 or GPL-3.0 — xemu's shader generators
+---------------------------------------------
+
+    src/nv2a_vk/xemu/pgraph/glsl/psh.c       pixel shader generator
+                          (c) 2013 espes; 2015 Jannik Vogel;
+                          2020-2025 Matt Borgerson; 2004 Aaron Robinson;
+                          2003 _SF_
+    src/nv2a_vk/xemu/pgraph/glsl/vsh-prog.c  vertex program translator
+                          (c) 2012 espes; 2014 Jannik Vogel;
+                          2025 Matt Borgerson; 2004 Aaron Robinson;
+                          2007 Shadow_tj, PatrickvL
+    src/nv2a_vk/xemu/pgraph/glsl/vsh-prog.h  (c) 2012 espes;
+                          2014 Jannik Vogel; 2025 Matt Borgerson
+    src/nv2a_vk/xemu/pgraph/vsh_regs.h       (c) 2012 espes
+
+  Licensed under the GNU General Public License, version 2 or (at your
+  option) version 3 (LICENSES/GPL-2.0.txt; version 3:
+  https://www.gnu.org/licenses/gpl-3.0.txt). These are GPL, not LGPL: a
+  program built with src/nv2a_vk, as Ninja Gaiden Black's is, must be
+  distributed under a GPL version these files allow, with its source.
+  xboxrecomp's own files stay MIT.
+
+
+MIT — S3TC decoding, in xemu
+----------------------------
+
+    src/nv2a_vk/xemu/pgraph/s3tc.c, s3tc.h    (c) 2020 Wilhelm Kovatch
+
+  The MIT notice is in each file.
+
 Derived algorithms — credited, independently implemented
 --------------------------------------------------------
 

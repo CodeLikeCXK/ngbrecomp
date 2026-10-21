@@ -18,7 +18,7 @@ struct TexInfo {
 };
 enum : uint8_t {
     kTexWide = 4,  // an upscaled target shrunk by the pass: each tap averaged over console texels
-    kTexSigned = 8,  // a bump map read from its offset binary copy: b g are du dv + 128 (in bytes)
+    kTexSigned = 8,  // a bump map (V8U8): its du dv decoded texel by texel in the shader (bumpduv)
 };
 
 struct PixelKey {
@@ -32,7 +32,9 @@ struct PixelKey {
     uint32_t alphakill = 0;  // bit per stage
     uint32_t flat = 0, two_sided = 0;
     uint32_t proj = 0;       // fixed function: bit per stage sampled at coordinates divided by w
-    uint32_t quad = 0;       // a screen quad: QuadHlsl
+    // a screen quad (QuadHlsl); a point sprite, stage 3 at the point's own coordinates after the stages before it
+    // (#51). Halves of what was one uint32_t quad: the key's size and bytes as the shader cache has them.
+    uint16_t quad = 0, sprite = 0;
     bool operator==(const PixelKey& o) const;
 };
 
@@ -65,8 +67,9 @@ struct ShaderHooks {
     virtual ~ShaderHooks() = default;
     // the cbuffer line for DrawConstants::ext
     virtual std::string Constants() const;
-    // float4 shadow(Texture2D<float> t, SamplerComparisonState s, float2 uv, float z, int fmt, float2 px, float2 size)
-    virtual std::string Shadow() const;
+    // float4 shadow%d(float2 uv, float z, int fmt, float2 px, float2 size): stage i's texture compared through its
+    // sampler (a helper per stage, naming them: see PixelHlsl)
+    virtual std::string Shadow(int i) const;
     // what spreadtap scales a render target's colour by
     virtual std::string ReadScale(const TexInfo&) const { return "1"; }
     // a cube sampled along dir at stage i, empty for a plain sample
@@ -88,7 +91,7 @@ struct DrawConstants {
     float tfactor[4];
     float texsize[4][4];
     float bump[4][4];   // 00 01 10 11
-    float bumpl[4][4];  // scale offset
+    float bumpl[4][4];  // scale offset, and for bumpduv the stage's LOD bias and most detailed level
     float wvp[16];      // fixed function
     float ext[4];       // a backend extension's, declared by ShaderHooks::Constants
     float spread[4][4]; // kTexWide: tap step in uv, taps per axis
