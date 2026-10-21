@@ -7,11 +7,13 @@
 #include <stddef.h>
 
 enum { ASPECT_4_3, ASPECT_16_9, ASPECT_16_10, ASPECT_21_9, ASPECT_COUNT };
+enum { RENDERER_AUTO, RENDERER_DX12, RENDERER_VULKAN, RENDERER_XEMU, RENDERER_COUNT };
 
 typedef struct NgbSettings {
     int aspect;          /* ASPECT_* */
     int width, height;   /* window size */
     int fullscreen;
+    int renderer;        /* RENDERER_* */
     int scale;           /* render scale 1..10 */
     int vsync;
     int show_fps;        /* frame rate and frame time overlay */
@@ -30,9 +32,9 @@ void ngb_settings_load(NgbSettings *s);
 void ngb_settings_save(const NgbSettings *s);
 
 /* The settings shown on the settings screens, in order: aspect, window
- * size, display, render resolution, anisotropic filtering, MSAA, shadow resolution,
+ * size, display, renderer, render resolution, anisotropic filtering, MSAA, shadow resolution,
  * V-Sync, FPS counter, skip intros. */
-#define NGB_SETTINGS_ITEMS 10
+#define NGB_SETTINGS_ITEMS 11
 /* Step setting item one way (dir -1/+1); its label and current value. */
 void ngb_settings_change(NgbSettings *s, int item, int dir);
 void ngb_settings_row_text(const NgbSettings *s, int item, const char **label,

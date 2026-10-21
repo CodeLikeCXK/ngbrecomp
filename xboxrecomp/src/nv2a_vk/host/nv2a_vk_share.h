@@ -48,6 +48,14 @@ void nv2a_quality_get(int *render_scale, int *anisotropy, int *shadow_scale, int
  * until the next call. VK_NULL_HANDLE goes back to the renderer's picture. */
 void nv2a_present_set_external(VkImage image, uint32_t width, uint32_t height);
 
+#if defined(_WIN32)
+void *nv2a_present_get_hwnd(void);
+#endif
+struct SDL_Window;
+struct SDL_Window *nv2a_present_get_window(void);
+bool nv2a_present_show_fps(void);
+bool nv2a_present_get_fps_bitmap(uint32_t *px, uint32_t max_w, uint32_t max_h, uint32_t *ow, uint32_t *oh, uint32_t screen_w, uint32_t screen_h);
+
 #ifdef __cplusplus
 }
 #endif

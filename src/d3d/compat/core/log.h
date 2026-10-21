@@ -11,3 +11,8 @@
             std::fputc('\n', stderr);                           \
         }                                                       \
     } while (0)
+
+#define LOGI(...) do { std::fprintf(stderr, "[D3D] " __VA_ARGS__); std::fputc('\n', stderr); } while (0)
+#define LOGE(...) do { std::fprintf(stderr, "[D3D ERROR] " __VA_ARGS__); std::fputc('\n', stderr); } while (0)
+#define LOGR(...) do { std::fprintf(stderr, "[D3D] " __VA_ARGS__); std::fputc('\n', stderr); } while (0)
+

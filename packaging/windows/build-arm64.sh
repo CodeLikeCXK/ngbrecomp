@@ -149,12 +149,22 @@ toolkit=$(cd "${XBOXRECOMP_DIR:-$repo/xboxrecomp}" && pwd)
 cp "$repo/src/d3d/NOTICE" "$pkg/licenses/NOTICE-renderer.txt"
 cp "$toolkit/LICENSE" "$pkg/licenses/LICENSE-xboxrecomp.txt"
 cp "$toolkit/NOTICE" "$pkg/licenses/NOTICE-xboxrecomp.txt"
-cp "$toolkit/LICENSES/LGPL-2.1.txt" "$pkg/licenses/"
+cp "$repo/packaging/windows/Launch Direct3D 12.bat" "$pkg/"
+cp "$repo/packaging/windows/Launch Settings.bat" "$pkg/"
+cp "$repo/packaging/windows/Create Desktop Shortcut.bat" "$pkg/"
 cat > "$pkg/README.txt" <<'TXT'
-Ninja Gaiden Black - native static recompilation for Windows ARM64 (Vulkan)
+Ninja Gaiden Black - native static recompilation for Windows ARM64
 
-Adapted for Snapdragon 8cx Gen 3 / WoA devices with Vulkan 1.1+ support.
-Supports both Direct3D (Vulkan 1.3+) and NV2A hardware renderer (Vulkan 1.1+).
+Adapted for Snapdragon 8cx Gen 3 / Windows on ARM devices with native Direct3D 12 support.
+Rendering options:
+- Direct3D 12 (recommended for Windows ARM64 / Adreno 690, enabled by default, or via --dx12)
+- Vulkan Direct3D HLE renderer (via --vulkan)
+- NV2A hardware-accurate renderer (via --xemu)
+
+Quick Start:
+1. Double-click "Create Desktop Shortcut.bat" to generate a "Ninja Gaiden Black (DX12)" shortcut on your Desktop.
+2. Or run "Launch Direct3D 12.bat" directly.
+3. Or run "Launch Settings.bat" (or NinjaGaidenBlack.exe --settings) to open the startup settings launcher.
 
 The game itself is not included. Start NinjaGaidenBlack.exe and choose your own copy of
 the retail USA Xbox release: a disc image (.iso, a full Redump dump, or the .7z/.zip it came in)

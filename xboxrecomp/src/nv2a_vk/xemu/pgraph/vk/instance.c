@@ -568,7 +568,7 @@ static bool create_logical_device(PGRAPHState *pg, Error **errp)
         F(occlusionQueryPrecise, true),
         F(samplerAnisotropy, false),
         F(shaderClipDistance, true),
-        F(shaderTessellationAndGeometryPointSize, true),
+        F(shaderTessellationAndGeometryPointSize, false),
         F(wideLines, false),
         F(largePoints, false),
         F(textureCompressionBC, false),
@@ -577,11 +577,13 @@ static bool create_logical_device(PGRAPHState *pg, Error **errp)
     };
 
     bool require_draw_features = true;
-#ifdef __APPLE__
     const char *renderer = getenv("NGB_RENDERER");
-    require_draw_features = !renderer || strcmp(renderer, "d3d")
-                         || getenv("NGB_D3D_KEEP_NV2A");
-#endif
+    if (renderer && (!strcmp(renderer, "d3d") ||
+                     !strcmp(renderer, "dx12") ||
+                     !strcmp(renderer, "d3d12"))) {
+        if (!getenv("NGB_D3D_KEEP_NV2A"))
+            require_draw_features = false;
+    }
     bool all_required_features_available = true;
     for (int i = 0; i < ARRAY_SIZE(desired_features); i++) {
         if (desired_features[i].required && require_draw_features &&

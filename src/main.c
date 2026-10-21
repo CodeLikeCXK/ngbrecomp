@@ -704,8 +704,13 @@ static void set_default(const char *name, const char *value)
 static void choose_renderer(void)
 {
 #if defined(NGB_NV2A_VK)
+#if defined(_WIN32) && (defined(__aarch64__) || defined(_M_ARM64))
+    set_default("NGB_RENDERER", "dx12");
+#else
     set_default("NGB_RENDERER", "d3d");   /* read again by src/d3d (d3d.c, hle.cpp, vk/backend.cpp) */
-    if (!strcmp(getenv("NGB_RENDERER"), "d3d") && !getenv("NGB_D3D_KEEP_NV2A"))
+#endif
+    const char *r_cur = getenv("NGB_RENDERER");
+    if (r_cur && (!strcmp(r_cur, "d3d") || !strcmp(r_cur, "dx12") || !strcmp(r_cur, "d3d12")) && !getenv("NGB_D3D_KEEP_NV2A"))
         set_default("NV2A_NO_PREWARM", "1");   /* xemu's renderer draws nothing: none of its pipelines */
 #endif
     const char *r = getenv("NGB_RENDERER");
@@ -1078,9 +1083,6 @@ int main(int argc, char **argv)
     if (getenv("NGB_HANG_DUMP"))
         CloseHandle(CreateThread(NULL, 0, hang_dump_thread,
                                  (LPVOID)(uintptr_t)atoi(getenv("NGB_HANG_DUMP")), 0, NULL));
-    if (!getenv("VK_ICD_FILENAMES") && access("C:/qcvk/qcvk_icd_arm64x.json", 0) == 0) {
-        putenv("VK_ICD_FILENAMES=C:\\qcvk\\qcvk_icd_arm64x.json");
-    }
 #else
     /* NGB_PTRACE_ANY=1: let any process of this user attach a debugger
      * (Yama's ptrace_scope 1 allows only ancestors), for stack dumps. */
@@ -1089,20 +1091,79 @@ int main(int argc, char **argv)
         prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
 #endif
 #endif
-    /* --settings: show the settings screen before the game (the settings
-     * are in the game's own menus; there is no screen otherwise). */
-    for (int i = 1; i < argc; i++)
+    /* Command-line arguments: shortcut flags and launcher options */
+    int cmd_renderer = -1;
+    for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--settings")) {
             s_show_settings = 1;
             memmove(&argv[i], &argv[i + 1], (size_t)(argc - i) * sizeof *argv);
             argc--;
             i--;
+        } else if (!strcmp(argv[i], "--dx12") || !strcmp(argv[i], "-dx12") || !strcmp(argv[i], "/dx12") ||
+                   !strcmp(argv[i], "--d3d12") || !strcmp(argv[i], "-d3d12") || !strcmp(argv[i], "/d3d12") ||
+                   !strcmp(argv[i], "--renderer=dx12") || !strcmp(argv[i], "-renderer=dx12") ||
+                   !strcmp(argv[i], "--renderer=d3d12") || !strcmp(argv[i], "-renderer=d3d12")) {
+            cmd_renderer = RENDERER_DX12;
+            memmove(&argv[i], &argv[i + 1], (size_t)(argc - i) * sizeof *argv);
+            argc--;
+            i--;
+        } else if (!strcmp(argv[i], "--vulkan") || !strcmp(argv[i], "-vulkan") || !strcmp(argv[i], "/vulkan") ||
+                   !strcmp(argv[i], "--vk") || !strcmp(argv[i], "-vk") || !strcmp(argv[i], "/vk") ||
+                   !strcmp(argv[i], "--renderer=vulkan") || !strcmp(argv[i], "-renderer=vulkan") ||
+                   !strcmp(argv[i], "--renderer=vk") || !strcmp(argv[i], "-renderer=vk") ||
+                   !strcmp(argv[i], "--renderer=d3d") || !strcmp(argv[i], "-renderer=d3d")) {
+            cmd_renderer = RENDERER_VULKAN;
+            memmove(&argv[i], &argv[i + 1], (size_t)(argc - i) * sizeof *argv);
+            argc--;
+            i--;
+        } else if (!strcmp(argv[i], "--xemu") || !strcmp(argv[i], "-xemu") || !strcmp(argv[i], "/xemu") ||
+                   !strcmp(argv[i], "--renderer=xemu") || !strcmp(argv[i], "-renderer=xemu")) {
+            cmd_renderer = RENDERER_XEMU;
+            memmove(&argv[i], &argv[i + 1], (size_t)(argc - i) * sizeof *argv);
+            argc--;
+            i--;
+        } else if ((!strcmp(argv[i], "--renderer") || !strcmp(argv[i], "-renderer")) && i + 1 < argc) {
+            const char *val = argv[i + 1];
+            if (!strcmp(val, "dx12") || !strcmp(val, "d3d12"))
+                cmd_renderer = RENDERER_DX12;
+            else if (!strcmp(val, "vulkan") || !strcmp(val, "vk") || !strcmp(val, "d3d"))
+                cmd_renderer = RENDERER_VULKAN;
+            else if (!strcmp(val, "xemu") || !strcmp(val, "nv2a"))
+                cmd_renderer = RENDERER_XEMU;
+            memmove(&argv[i], &argv[i + 2], (size_t)(argc - i - 1) * sizeof *argv);
+            argc -= 2;
+            i--;
         }
+    }
 #if defined(NGB_NV2A_VK)
     {
         extern void ngb_set_argv(char **argv);   /* src/ingame_menu.c: Return to Main Menu */
         ngb_set_argv(argv);
     }
+    static NgbSettings s_cfg;
+    ngb_settings_load(&s_cfg);
+    if (cmd_renderer >= 0)
+        s_cfg.renderer = cmd_renderer;
+
+    if (!s_headless && (s_show_settings || (s_cfg.show_launcher && !getenv("NGB_NO_SETTINGS")))) {
+        if (!ngb_launcher_run(&s_cfg))
+            return 0;
+    }
+
+    int r = (cmd_renderer >= 0) ? cmd_renderer : s_cfg.renderer;
+    if (r == RENDERER_AUTO) {
+#if defined(_WIN32) && (defined(__aarch64__) || defined(_M_ARM64))
+        r = RENDERER_DX12;
+#else
+        r = RENDERER_VULKAN;
+#endif
+    }
+    if (r == RENDERER_DX12)
+        setenv("NGB_RENDERER", "dx12", 1);
+    else if (r == RENDERER_XEMU)
+        setenv("NGB_RENDERER", "xemu", 1);
+    else
+        setenv("NGB_RENDERER", "d3d", 1);
 #endif
 
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -1151,15 +1212,8 @@ int main(int argc, char **argv)
 #endif
 
 #if defined(NGB_NV2A_VK)
-    /* The settings screen, then the settings. Environment variables of the
-     * same meaning still win, for testing. */
-    NgbSettings cfg;
-    ngb_settings_load(&cfg);
-    if (s_use_gpu && !s_headless && s_show_settings &&
-        !getenv("NGB_NO_SETTINGS")) {
-        if (!ngb_launcher_run(&cfg))
-            return 0;
-    }
+    /* Apply settings and quality overrides. */
+    NgbSettings cfg = s_cfg;
     {
         const char *e;
         if ((e = getenv("NGB_WIDESCREEN")))

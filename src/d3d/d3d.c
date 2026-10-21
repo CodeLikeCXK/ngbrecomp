@@ -156,7 +156,7 @@ int d3d_hook(int fn)
         ngb_frame_tick();
     if (s_hle < 0) {
         const char *e = getenv("NGB_RENDERER");
-        s_hle = e && (!strcmp(e, "d3d") || !strcmp(e, "mirror"));
+        s_hle = e && (!strcmp(e, "d3d") || !strcmp(e, "dx12") || !strcmp(e, "d3d12") || !strcmp(e, "mirror"));
         if (getenv("NGB_D3D_WATCHDOG")) {
             pthread_t th;
             s_watchdog = 1;

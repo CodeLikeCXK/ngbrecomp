@@ -3694,6 +3694,7 @@ void VulkanBackend::WarmSamples(uint32_t samples) {
 
 }  // namespace
 
-std::unique_ptr<Backend> CreateBackend() { return std::make_unique<VulkanBackend>(); }
+std::unique_ptr<Backend> CreateVulkanBackend() { return std::make_unique<VulkanBackend>(); }
 
 }  // namespace gpu
+

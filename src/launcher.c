@@ -104,6 +104,11 @@ void ngb_settings_load(NgbSettings *s)
     s->width = 1280;
     s->height = 720;
     s->fullscreen = 0;
+#if defined(_WIN32) && (defined(__aarch64__) || defined(_M_ARM64))
+    s->renderer = RENDERER_DX12;
+#else
+    s->renderer = RENDERER_AUTO;
+#endif
     s->scale = 1;
     s->vsync = 0;
     s->show_fps = 0;
@@ -135,6 +140,15 @@ void ngb_settings_load(NgbSettings *s)
             }
         } else if (!strcmp(key, "fullscreen")) {
             s->fullscreen = atoi(val) < 0 ? 0 : atoi(val) > 2 ? 2 : atoi(val);
+        } else if (!strcmp(key, "renderer")) {
+            if (!strcmp(val, "dx12") || !strcmp(val, "d3d12"))
+                s->renderer = RENDERER_DX12;
+            else if (!strcmp(val, "vulkan") || !strcmp(val, "vk") || !strcmp(val, "d3d"))
+                s->renderer = RENDERER_VULKAN;
+            else if (!strcmp(val, "xemu") || !strcmp(val, "nv2a"))
+                s->renderer = RENDERER_XEMU;
+            else if (!strcmp(val, "auto"))
+                s->renderer = RENDERER_AUTO;
         } else if (!strcmp(key, "render_scale")) {
             int v = atoi(val);
             s->scale = v < 1 ? 1 : v > 10 ? 10 : v;
@@ -184,6 +198,10 @@ void ngb_settings_save(const NgbSettings *s)
     fprintf(f, "aspect = %s\n", ASPECT_NAMES[s->aspect]);
     fprintf(f, "window = %dx%d\n", s->width, s->height);
     fprintf(f, "fullscreen = %d\n", s->fullscreen);
+    const char *r_str = s->renderer == RENDERER_DX12 ? "dx12"
+                      : s->renderer == RENDERER_VULKAN ? "vulkan"
+                      : s->renderer == RENDERER_XEMU ? "xemu" : "auto";
+    fprintf(f, "renderer = %s\n", r_str);
     fprintf(f, "render_scale = %d\n", s->scale);
     fprintf(f, "vsync = %d\n", s->vsync);
     fprintf(f, "show_fps = %d\n", s->show_fps);
@@ -301,7 +319,7 @@ static void fill(SDL_Renderer *r, int x, int y, int w, int h, SDL_Color c)
 
 /* ---------- the screen ---------- */
 
-enum { ROW_ASPECT, ROW_SIZE, ROW_DISPLAY, ROW_SCALE, ROW_TEXFILTER, ROW_MSAA, ROW_SHADOW,
+enum { ROW_ASPECT, ROW_SIZE, ROW_DISPLAY, ROW_RENDERER, ROW_SCALE, ROW_TEXFILTER, ROW_MSAA, ROW_SHADOW,
        ROW_VSYNC, ROW_FPS, ROW_SKIP, ROW_START, ROW_QUIT, NROWS };
 _Static_assert(ROW_START == NGB_SETTINGS_ITEMS, "settings rows");
 
@@ -320,8 +338,9 @@ void ngb_settings_change(NgbSettings *s, int row, int dir)
         s->height = sizes_for(s->aspect)[i][1];
         break;
     }
-    case ROW_DISPLAY: s->fullscreen = (s->fullscreen + (dir < 0 ? 2 : 1)) % 3; break;
-    case ROW_SCALE:   s->scale = (s->scale - 1 + dir + 10) % 10 + 1; break;
+    case ROW_DISPLAY:  s->fullscreen = (s->fullscreen + (dir < 0 ? 2 : 1)) % 3; break;
+    case ROW_RENDERER: s->renderer = (s->renderer + dir + RENDERER_COUNT) % RENDERER_COUNT; break;
+    case ROW_SCALE:    s->scale = (s->scale - 1 + dir + 10) % 10 + 1; break;
     case ROW_VSYNC:   s->vsync = ngb_vsync_step(s->vsync, dir); break;
     case ROW_FPS:     s->show_fps = !s->show_fps; break;
     case ROW_TEXFILTER: {
@@ -357,10 +376,25 @@ void ngb_settings_row_text(const NgbSettings *s, int row, const char **label, ch
         "Native (1x)", "2x", "3x", "4x", "5x", "6x", "7x", "8x", "9x", "10x" };
     val[0] = 0;
     switch (row) {
-    case ROW_ASPECT:  *label = "Aspect ratio";  snprintf(val, n, "%s", ASPECT_LABEL[s->aspect]); break;
-    case ROW_SIZE:    *label = "Window size";   snprintf(val, n, "%d x %d", s->width, s->height); break;
-    case ROW_DISPLAY: *label = "Display";       snprintf(val, n, "%s", s->fullscreen == 2 ? "Borderless" : s->fullscreen ? "Fullscreen" : "Windowed"); break;
-    case ROW_SCALE:   *label = "Render resolution"; snprintf(val, n, "%s", SCALE_LABEL[s->scale - 1]); break;
+    case ROW_ASPECT:   *label = "Aspect ratio";  snprintf(val, n, "%s", ASPECT_LABEL[s->aspect]); break;
+    case ROW_SIZE:     *label = "Window size";   snprintf(val, n, "%d x %d", s->width, s->height); break;
+    case ROW_DISPLAY:  *label = "Display";       snprintf(val, n, "%s", s->fullscreen == 2 ? "Borderless" : s->fullscreen ? "Fullscreen" : "Windowed"); break;
+    case ROW_RENDERER:
+        *label = "Renderer";
+        switch (s->renderer) {
+        case RENDERER_DX12:   snprintf(val, n, "Direct3D 12"); break;
+        case RENDERER_VULKAN: snprintf(val, n, "Vulkan"); break;
+        case RENDERER_XEMU:   snprintf(val, n, "NV2A (xemu)"); break;
+        default:
+#if defined(_WIN32) && (defined(__aarch64__) || defined(_M_ARM64))
+            snprintf(val, n, "Auto (DX12)");
+#else
+            snprintf(val, n, "Auto (Vulkan)");
+#endif
+            break;
+        }
+        break;
+    case ROW_SCALE:    *label = "Render resolution"; snprintf(val, n, "%s", SCALE_LABEL[s->scale - 1]); break;
     case ROW_VSYNC:   *label = "V-Sync";        snprintf(val, n, "%s", ngb_vsync_name(s->vsync)); break;
     case ROW_FPS:     *label = "Show FPS";      snprintf(val, n, "%s", s->show_fps ? "On" : "Off"); break;
     case ROW_TEXFILTER: *label = "Anisotropic filtering"; if (s->anisotropy) snprintf(val, n, "%dx", s->anisotropy); else snprintf(val, n, "Off"); break;

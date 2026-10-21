@@ -1416,8 +1416,8 @@ static int pad_key(void)
 /* ---------- drawing (0xAARRGGBB, software) ---------- */
 
 #define LH 740
-#define ROW_Y0 124
-#define ROW_H  42
+#define ROW_Y0 120
+#define ROW_H  40
 
 static uint32_t *s_px;
 

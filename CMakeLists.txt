@@ -148,17 +148,21 @@ endif()
 # ── The Direct3D renderer (docs/renderer.md, src/d3d/NOTICE) ────
 
 if(NGB_NV2A_VK)
+    set(XRTP ${XBOXRECOMP_DIR}/third_party)
     if(APPLE)
         find_package(glslang CONFIG REQUIRED)
     endif()
-    set(XRTP ${XBOXRECOMP_DIR}/third_party)
-    add_library(ngb_d3d OBJECT
+    set(NGB_D3D_SOURCES
         src/d3d/hle.cpp
         src/d3d/vk/backend.cpp
         src/d3d/vk/spirv.cpp
         src/d3d/gpu/shaders.cpp
         src/d3d/gpu/vertex.cpp
         src/d3d/gpu/texture.cpp)
+    if(WIN32)
+        list(APPEND NGB_D3D_SOURCES src/d3d/d3d12_backend.cpp)
+    endif()
+    add_library(ngb_d3d OBJECT ${NGB_D3D_SOURCES})
     target_include_directories(ngb_d3d PRIVATE
         src
         src/d3d src/d3d/compat ${XBOXRECOMP_DIR}/src/nv2a_vk/host
@@ -208,7 +212,7 @@ if(WIN32)
     set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME NinjaGaidenBlack
                           WIN32_EXECUTABLE TRUE)
     target_link_libraries(${PROJECT_NAME} PRIVATE
-        winmm dbghelp comdlg32 comctl32 shell32 ole32)
+        winmm dbghelp comdlg32 comctl32 shell32 ole32 d3d12 dxgi d3dcompiler_47)
     if(MSVC)
         target_link_options(${PROJECT_NAME} PRIVATE /LARGEADDRESSAWARE)
     endif()

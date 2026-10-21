@@ -538,12 +538,34 @@ void After(int fn, Call c) {
 
 extern "C" [[noreturn]] void ngb_renderer_fatal(const char* detail);  // src/ingame_menu.c
 
+}  // namespace
+
+namespace gpu {
+std::unique_ptr<Backend> CreateVulkanBackend();
+#if defined(_WIN32)
+std::unique_ptr<Backend> CreateD3D12Backend();
+#endif
+
+std::unique_ptr<Backend> CreateBackend() {
+    const char* r = std::getenv("NGB_RENDERER");
+#if defined(_WIN32)
+    if (r && (!std::strcmp(r, "dx12") || !std::strcmp(r, "d3d12"))) {
+        return CreateD3D12Backend();
+    }
+#endif
+    return CreateVulkanBackend();
+}
+}  // namespace gpu
+
+namespace {
+
 bool g_started;
 
 void Start() {
     g_started = true;
     const char* e = std::getenv("NGB_RENDERER");
-    g_mirror = !e || std::strcmp(e, "d3d") != 0;
+    bool is_d3d = e && (!std::strcmp(e, "d3d") || !std::strcmp(e, "dx12") || !std::strcmp(e, "d3d12"));
+    g_mirror = !is_d3d;
     g_state = gpu::State{};
     g_backend = gpu::CreateBackend();
     if (g_backend && !g_backend->Init(640, 480)) {

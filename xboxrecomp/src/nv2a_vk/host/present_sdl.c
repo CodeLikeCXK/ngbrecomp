@@ -25,6 +25,9 @@
 #include <SDL.h>
 #include <pthread.h>
 #include <SDL_vulkan.h>
+#if defined(_WIN32)
+#include <SDL_syswm.h>
+#endif
 
 #define FRAMES_IN_FLIGHT 2
 #define MAX_SWAP_IMAGES 8
@@ -33,6 +36,25 @@ static SDL_Window *s_window;
 static double s_aspect = 4.0 / 3.0;
 static int s_vsync;                /* 0 off, 1 mailbox, 2 adaptive, 3 FIFO */
 static volatile bool s_resized;
+
+#if defined(_WIN32)
+void *nv2a_present_get_hwnd(void)
+{
+    if (!s_window)
+        return NULL;
+    SDL_SysWMinfo wm;
+    SDL_VERSION(&wm.version);
+    if (SDL_GetWindowWMInfo(s_window, &wm))
+        return (void *)wm.info.win.window;
+    return NULL;
+}
+#endif
+
+struct SDL_Window *nv2a_present_get_window(void)
+{
+    return s_window;
+}
+
 
 static VkInstance s_instance;
 #ifdef __APPLE__
@@ -309,6 +331,58 @@ static void fps_draw(unsigned f, uint32_t *ow, uint32_t *oh)
     *oh = h;
 }
 
+bool nv2a_present_show_fps(void)
+{
+    static int s_env_checked = 0;
+    if (!s_env_checked) {
+        s_env_checked = 1;
+        const char *e = getenv("NV2A_SHOW_FPS");
+        if (e && *e && *e != '0') {
+            s_show_fps = true;
+        }
+    }
+    return s_show_fps;
+}
+
+bool nv2a_present_get_fps_bitmap(uint32_t *px, uint32_t max_w, uint32_t max_h, uint32_t *ow, uint32_t *oh, uint32_t screen_w, uint32_t screen_h)
+{
+    if (!nv2a_present_show_fps() || !px || !ow || !oh)
+        return false;
+    fps_track();
+    unsigned k = screen_h / 360;
+    if (k < 2) k = 2;
+    if (k > 8) k = 8;
+    const char *t = s_fps_text;
+    uint32_t w = (uint32_t)(strlen(t) * 6 + 5) * k;
+    uint32_t h = 13 * k;
+    if (w > max_w) w = max_w;
+    if (h > max_h) h = max_h;
+    if (w > screen_w) w = screen_w;
+    if (h > screen_h) h = screen_h;
+    for (uint32_t i = 0; i < w * h; i++)
+        px[i] = 0xC0181818u;
+    for (int ci = 0; t[ci]; ci++) {
+        const uint8_t *g = glyph(t[ci]);
+        if (!g)
+            continue;
+        for (int gy = 0; gy < 7; gy++)
+            for (int gx = 0; gx < 5; gx++) {
+                if (!(g[gy] & (0x10 >> gx)))
+                    continue;
+                for (unsigned yy = 0; yy < k; yy++)
+                    for (unsigned xx = 0; xx < k; xx++) {
+                        uint32_t x = (3 + ci * 6 + gx) * k + xx;
+                        uint32_t y = (3 + gy) * k + yy;
+                        if (x < w && y < h)
+                            px[y * w + x] = 0xFFFFFFFFu;
+                    }
+            }
+    }
+    *ow = w;
+    *oh = h;
+    return true;
+}
+
 static void fps_init(PGRAPHVkState *r)
 {
     const char *e = getenv("NV2A_SHOW_FPS");
@@ -371,6 +445,8 @@ int nv2a_window_create(const char *title, int width, int height,
         fprintf(stderr, "nv2a: SDL video: %s\n", SDL_GetError());
         return -1;
     }
+    const char *ren = getenv("NGB_RENDERER");
+    bool is_dx12 = ren && (!strcmp(ren, "dx12") || !strcmp(ren, "d3d12"));
     s_window = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED,
                                 SDL_WINDOWPOS_CENTERED, width, height,
                                 (getenv("NGB_TEST_HIDDEN") ? SDL_WINDOW_HIDDEN : 0) |
@@ -382,7 +458,9 @@ int nv2a_window_create(const char *title, int width, int height,
         fprintf(stderr, "nv2a: window: %s\n", SDL_GetError());
         return -1;
     }
-    fprintf(stderr, "nv2a: window on %s\n", SDL_GetCurrentVideoDriver());
+    fprintf(stderr, "nv2a: window on %s%s\n", SDL_GetCurrentVideoDriver(), is_dx12 ? " (DX12 target)" : "");
+    if (is_dx12)
+        nv2a_vk_set_draws_off(true);
     if (fullscreen == 2)
         borderless_apply(s_window);
     if (aspect > 0)
@@ -1219,6 +1297,9 @@ static PGRAPHState *volatile s_pg;
 
 void nv2a_host_vk_present(PGRAPHState *pg)
 {
+    const char *ren = getenv("NGB_RENDERER");
+    if (ren && (!strcmp(ren, "dx12") || !strcmp(ren, "d3d12")))
+        return;
     s_pg = pg;
     pthread_mutex_lock(&s_present_mu);
     present_locked(pg, true);
@@ -1249,6 +1330,9 @@ static bool present_external_now(void)
 
 static void present_locked(PGRAPHState *pg, bool on_pfifo)
 {
+    const char *ren = getenv("NGB_RENDERER");
+    if (ren && (!strcmp(ren, "dx12") || !strcmp(ren, "d3d12")))
+        return;
     PGRAPHVkState *r = pg->vk_renderer_state;
     VkCommandBuffer cmd;
     uint32_t idx;
