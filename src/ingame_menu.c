@@ -1201,6 +1201,10 @@ void nv2a_window_event_hook(const void *sdl_event)
         extern volatile int ngb_pos_request;   /* src/cheats.c: Ryu's position to a file (debugging) */
         ngb_pos_request = 1;
     }
+    if (ev->type == SDL_KEYDOWN && ev->key.keysym.sym == SDLK_F9 && !ev->key.repeat) {
+        extern bool ngb_autosave_quick_load(void);   /* src/autosave.c: Quick load autosave */
+        ngb_autosave_quick_load();
+    }
     {
         extern int ngb_bind_event(const SDL_Event *ev);   /* src/bindings.c: waiting for a key to bind */
         if (ngb_bind_event(ev))

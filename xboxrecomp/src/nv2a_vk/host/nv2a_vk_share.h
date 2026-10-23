@@ -54,6 +54,7 @@ void *nv2a_present_get_hwnd(void);
 struct SDL_Window;
 struct SDL_Window *nv2a_present_get_window(void);
 bool nv2a_present_show_fps(void);
+const char *nv2a_present_get_fps_text(void);
 bool nv2a_present_get_fps_bitmap(uint32_t *px, uint32_t max_w, uint32_t max_h, uint32_t *ow, uint32_t *oh, uint32_t screen_w, uint32_t screen_h);
 
 #ifdef __cplusplus

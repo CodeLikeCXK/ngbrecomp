@@ -344,6 +344,12 @@ bool nv2a_present_show_fps(void)
     return s_show_fps;
 }
 
+const char *nv2a_present_get_fps_text(void)
+{
+    fps_track();
+    return s_fps_text;
+}
+
 bool nv2a_present_get_fps_bitmap(uint32_t *px, uint32_t max_w, uint32_t max_h, uint32_t *ow, uint32_t *oh, uint32_t screen_w, uint32_t screen_h)
 {
     if (!nv2a_present_show_fps() || !px || !ow || !oh)
@@ -566,8 +572,6 @@ bool nv2a_window_pump(void)
         case SDL_KEYDOWN:
             if (ev.key.keysym.sym == SDLK_F10 && !ev.key.repeat)
                 s_show_fps = !s_show_fps;
-            if (ev.key.keysym.sym == SDLK_F9 && !ev.key.repeat)
-                __atomic_store_n(&s_f9_frames, 120, __ATOMIC_RELEASE);
             if (ev.key.keysym.sym == SDLK_F11 ||
                 (ev.key.keysym.sym == SDLK_RETURN &&
                  (ev.key.keysym.mod & KMOD_ALT))) {
@@ -1575,6 +1579,32 @@ static void present_locked(PGRAPHState *pg, bool on_pfifo)
         };
         vkCmdCopyBufferToImage(cmd, s_ovl_buf[f], s_images[idx],
                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    }
+
+    __attribute__((weak)) extern bool ngb_autosave_banner_active(void);
+    __attribute__((weak)) extern bool ngb_autosave_get_bitmap(uint32_t *px, uint32_t max_w, uint32_t max_h,
+                                                             uint32_t *ow, uint32_t *oh,
+                                                             uint32_t screen_w, uint32_t screen_h);
+    if (ngb_autosave_banner_active && ngb_autosave_banner_active() &&
+        ngb_autosave_get_bitmap && s_ovl_ptr[f]) {
+        uint32_t aw = 0, ah = 0;
+        if (ngb_autosave_get_bitmap((uint32_t *)s_ovl_ptr[f], OVL_MAX_W, OVL_MAX_H,
+                                    &aw, &ah, s_extent.width, s_extent.height) && aw && ah) {
+            vmaFlushAllocation(r->allocator, s_ovl_mem[f], 0, VK_WHOLE_SIZE);
+            barrier(cmd, s_images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
+                    VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT);
+            int32_t vx = s_extent.width > aw ? (int32_t)(s_extent.width - aw) : 0;
+            VkBufferImageCopy as_region = {
+                .bufferRowLength = aw,
+                .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+                .imageOffset = { vx, 0, 0 },
+                .imageExtent = { aw, ah, 1 },
+            };
+            vkCmdCopyBufferToImage(cmd, s_ovl_buf[f], s_images[idx],
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &as_region);
+        }
     }
 
     barrier(cmd, s_images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,

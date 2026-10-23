@@ -36,7 +36,6 @@ static uint32_t mix(uint32_t bg, uint32_t fg, unsigned a)
 static bool fps_rasterize(const char *text, uint32_t line_px, uint32_t *px, uint32_t maxw, uint32_t maxh,
                           uint32_t *ow, uint32_t *oh);
 
-extern bool ngb_autosave_banner_active(void);
 extern int ngb_pc_setting(int which);
 
 /* Called at every present, for each frame's buffer; the text changes twice a second. Rasterized once and
@@ -50,14 +49,7 @@ bool nv2a_fps_render(const char *text, uint32_t line_px, uint32_t *px, uint32_t 
     static bool ok;
 
     char display_text[64];
-    if (ngb_autosave_banner_active()) {
-        if (ngb_pc_setting(5) && text && *text)
-            snprintf(display_text, sizeof(display_text), "[ AUTOSAVED ]  %s", text);
-        else
-            snprintf(display_text, sizeof(display_text), "[ AUTOSAVED ]");
-    } else {
-        snprintf(display_text, sizeof(display_text), "%s", text ? text : "");
-    }
+    snprintf(display_text, sizeof(display_text), "%s", text ? text : "");
 
     if (!cache || strncmp(display_text, last, sizeof last) || line_px != last_line || maxw != last_mw || maxh != last_mh) {
         uint32_t *grown = realloc(cache, (size_t)maxw * maxh * 4);

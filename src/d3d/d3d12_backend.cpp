@@ -45,6 +45,8 @@ extern "C" int nv2a_present_vsync(void);
 extern "C" void nv2a_vk_set_draws_off(bool off);
 extern "C" [[noreturn]] void ngb_renderer_fatal(const char* detail);
 extern "C" bool nv2a_present_show_fps(void);
+extern "C" bool ngb_autosave_banner_active(void);
+extern "C" bool ngb_autosave_get_bitmap(uint32_t *px, uint32_t max_w, uint32_t max_h, uint32_t *ow, uint32_t *oh, uint32_t screen_w, uint32_t screen_h);
 extern "C" bool nv2a_present_get_fps_bitmap(uint32_t *px, uint32_t max_w, uint32_t max_h, uint32_t *ow, uint32_t *oh, uint32_t screen_w, uint32_t screen_h);
 extern "C" volatile unsigned nv2a_pcrtc_start_writes;
 
@@ -780,6 +782,12 @@ private:
     uint32_t fps_h_ = 0;
     D3D12_RESOURCE_STATES fps_state_ = D3D12_RESOURCE_STATE_COPY_DEST;
     std::vector<uint32_t> fps_px_;
+    ComPtr<ID3D12Resource> autosave_tex_;
+    uint32_t autosave_w_ = 0;
+    uint32_t autosave_h_ = 0;
+    D3D12_RESOURCE_STATES autosave_state_ = D3D12_RESOURCE_STATE_COPY_DEST;
+    std::vector<uint32_t> autosave_px_;
+    void DrawAutosaveOverlay(uint32_t bi);
 };
 
 D3D12Backend::~D3D12Backend() {
@@ -2967,6 +2975,53 @@ void D3D12Backend::DrawFpsOverlay(uint32_t /*bi*/) {
     Blit(fps_tex_.Get(), DXGI_FORMAT_B8G8R8A8_UNORM, uv, {.alpha = true, .over = true});
 }
 
+void D3D12Backend::DrawAutosaveOverlay(uint32_t /*bi*/) {
+    if (!ngb_autosave_banner_active()) return;
+
+    if (autosave_px_.empty()) autosave_px_.resize(1600 * 160);
+    uint32_t w = 0, h = 0;
+    if (!ngb_autosave_get_bitmap(autosave_px_.data(), 1600, 160, &w, &h, bb_w_, bb_h_) || !w || !h) return;
+
+    if (!autosave_tex_ || autosave_w_ < w || autosave_h_ < h) {
+        autosave_w_ = std::max(w, 512u);
+        autosave_h_ = std::max(h, 128u);
+        D3D12_HEAP_PROPERTIES hp{D3D12_HEAP_TYPE_DEFAULT};
+        D3D12_RESOURCE_DESC td = Texture2DDesc(DXGI_FORMAT_B8G8R8A8_UNORM, autosave_w_, autosave_h_);
+        dev_->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &td, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                      IID_PPV_ARGS(&autosave_tex_));
+        autosave_state_ = D3D12_RESOURCE_STATE_COPY_DEST;
+    }
+
+    uint32_t row_pitch = (w * 4 + D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1) & ~(D3D12_TEXTURE_DATA_PITCH_ALIGNMENT - 1);
+    uint32_t total_bytes = row_pitch * h;
+    Alloc a = Upload(total_bytes, D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT);
+    for (uint32_t y = 0; y < h; y++) {
+        std::memcpy(a.cpu + y * row_pitch, autosave_px_.data() + y * w, w * 4);
+    }
+
+    Transition(autosave_tex_.Get(), autosave_state_, D3D12_RESOURCE_STATE_COPY_DEST);
+
+    D3D12_TEXTURE_COPY_LOCATION dst{autosave_tex_.Get(), D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+    D3D12_TEXTURE_COPY_LOCATION src{a.res, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+    src.PlacedFootprint.Offset = a.off;
+    src.PlacedFootprint.Footprint = {DXGI_FORMAT_B8G8R8A8_UNORM, w, h, 1, row_pitch};
+
+    D3D12_BOX box{0, 0, 0, w, h, 1};
+    cl_->CopyTextureRegion(&dst, 0, 0, 0, &src, &box);
+
+    Transition(autosave_tex_.Get(), autosave_state_, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+
+    float vx = float(bb_w_ > w + 10 ? bb_w_ - w - 10 : (bb_w_ > w ? bb_w_ - w : 0));
+    float vy = float(bb_h_ > h + 10 ? 10.0f : 0.0f);
+    D3D12_VIEWPORT vp{vx, vy, float(w), float(h), 0.0f, 1.0f};
+    D3D12_RECT scissor{LONG(vx), LONG(vy), LONG(vx + w), LONG(vy + h)};
+    cl_->RSSetViewports(1, &vp);
+    cl_->RSSetScissorRects(1, &scissor);
+
+    float uv[4] = {0, 0, float(w) / float(autosave_w_), float(h) / float(autosave_h_)};
+    Blit(autosave_tex_.Get(), DXGI_FORMAT_B8G8R8A8_UNORM, uv, {.alpha = true, .over = true});
+}
+
 void D3D12Backend::DrawFrame(Target* t, uint32_t bi) {
     D3D12_RESOURCE_STATES bs = D3D12_RESOURCE_STATE_PRESENT;
     Transition(bb_[bi].Get(), bs, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -2977,6 +3032,7 @@ void D3D12Backend::DrawFrame(Target* t, uint32_t bi) {
     bound_rt_ = bound_ds_ = nullptr;
     if (t) BlitFrame(*t);
     DrawFpsOverlay(bi);
+    DrawAutosaveOverlay(bi);
     Transition(bb_[bi].Get(), bs, D3D12_RESOURCE_STATE_PRESENT);
 }
 
