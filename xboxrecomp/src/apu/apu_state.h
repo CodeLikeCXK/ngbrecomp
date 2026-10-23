@@ -227,18 +227,24 @@ hrtf_filter_set_target_params(HrtfFilter *f, float hrir_coeff[2][HRTF_NUM_TAPS],
                               float itd) {
     f->itd_tar = fmaxf(-(float)HRTF_MAX_DELAY_SAMPLES,
                         fminf(itd, (float)HRTF_MAX_DELAY_SAMPLES));
+    /* xboxrecomp: one scale for both ears, so their average gain at low
+     * frequencies (the sum of the taps) is 1. xemu divided each ear by the sum
+     * of its taps' magnitudes: Ninja Gaiden Black's filters (|taps| summing to
+     * 5.5-7.8, signed sums 2-3) came out ~6 dB quieter than the dry voice, and
+     * each ear's own scale flattened the level difference between the ears.
+     * Unscaled they are twice as loud and clip. Measured over the attract
+     * demo's fight: within 0.5 dB of the mono mix before #30, no clipping. */
+    float dc = 0.0f;
     for (int ch = 0; ch < 2; ch++) {
-        float *coeff = f->ch[ch].hrir_coeff_tar;
-        memcpy(coeff, hrir_coeff[ch], sizeof(f->ch[ch].hrir_coeff_tar));
-        float s = 0.0f;
-        for (int k = 0; k < HRTF_NUM_TAPS; k++) {
-            s += fabsf(coeff[k]);
-        }
-        if (s == 0.0f || s == 1.0f) break;
-        for (int k = 0; k < HRTF_NUM_TAPS; k++) {
-            coeff[k] /= s;
-        }
+        float sum = 0.0f;
+        for (int k = 0; k < HRTF_NUM_TAPS; k++)
+            sum += hrir_coeff[ch][k];
+        dc += fabsf(sum);
     }
+    float g = dc > 0.0f ? 2.0f / dc : 1.0f;
+    for (int ch = 0; ch < 2; ch++)
+        for (int k = 0; k < HRTF_NUM_TAPS; k++)
+            f->ch[ch].hrir_coeff_tar[k] = hrir_coeff[ch][k] * g;
 }
 
 static inline float hrtf_filter_smooth_param(float cur, float tar) {

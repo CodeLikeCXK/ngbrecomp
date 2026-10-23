@@ -338,6 +338,7 @@ COND_MAP = {
 FLAG_SETTERS = frozenset({
     "cmp", "test", "sub", "add", "and", "or", "xor",
     "inc", "dec", "neg", "shl", "shr", "sar", "imul", "adc", "sbb",
+    "mul", "daa", "das",
     "comiss", "comisd", "ucomiss", "ucomisd",  # SSE float compare
 })
 
@@ -395,7 +396,7 @@ _EFLAGS_SETTERS = frozenset({
 
 # Instructions with undefined/unpredictable flags (clear tracking)
 _FLAGS_UNDEFINED = frozenset({
-    "mul", "div", "idiv",  # Flags partially undefined
+    "div", "idiv",  # Flags undefined
     "rdtsc", "cpuid",      # Special instructions
     "lock xadd",           # Lock prefix - complex flag behavior
     # popfd REPLACES every flag with whatever was pushed. Its flags are not
@@ -542,6 +543,14 @@ def _make_condition(jcc, flag_setter, flag_ops):
             return f"{cmp_macro}(_fa, _fb)", desc
         return None
 
+    # A join whose predecessors all left CF in _cf (translator): carry only.
+    if flag_setter == "__cf_in_cf":
+        if jcc in ("jb", "jnae", "jc"):
+            return "_cf", desc
+        if jcc in ("jae", "jnb", "jnc"):
+            return "!_cf", desc
+        return None
+
     if flag_setter == "__zf_from_dest" and flag_ops:
         dest = _fmt_operand_read(flag_ops[0])
         if jcc in ("je", "jz"):
@@ -610,9 +619,67 @@ def _make_condition(jcc, flag_setter, flag_ops):
             return f"{expr} /* {flag_setter} */", desc
         return None
 
+    # ── mul/imul: CF = OF = "the product did not fit"; the lift leaves that in _fb ──
+    if flag_setter in ("mul", "imul"):
+        if jcc in ("jo", "jb", "jnae", "jc"):
+            return "(_fb != 0)", desc
+        if jcc in ("jno", "jae", "jnb", "jnc"):
+            return "(_fb == 0)", desc
+        return None
+
+    # ── daa/das: AL decimal-adjusted into _fa, CF into _cf ──
+    # The 68000 cores in the arcade titles run ABCD/SBCD as adc/sbb + daa/das
+    # and read Z and C straight after with sete/setb.
+    if flag_setter in ("daa", "das"):
+        if jcc in ("je", "jz"):
+            return "(_fa == 0)", desc
+        if jcc in ("jne", "jnz"):
+            return "(_fa != 0)", desc
+        if jcc in ("jb", "jnae", "jc"):
+            return "_cf", desc
+        if jcc in ("jae", "jnb", "jnc"):
+            return "!_cf", desc
+        if jcc == "js":
+            return "(_fas < 0)", desc
+        if jcc == "jns":
+            return "(_fas >= 0)", desc
+        return None
+
     # If no operands available for other flag-setters, can't generate condition
     if lhs is None:
         return None
+
+    # ── OF, rebuilt at the consumer from the operands the setter left ──
+    # seto/jo had no answer after any of these, so a seto after add/sub/cmp
+    # stayed unimplemented: the arcade's 68000 core stores the V flag that
+    # way (seto byte [V]) after every add, sub and cmp, and signed branches
+    # (BLT, BGE, BVS...) all read V.
+    if jcc in ("jo", "jno") and flag_setter in ("add", "sub", "cmp", "neg",
+                                               "and", "or", "xor", "test"):
+        w = (_operand_width(flag_ops[0]) if flag_ops else None) or 4
+        sign = f"0x{1 << (w * 8 - 1):X}u"
+        mask = f"0x{(1 << (w * 8)) - 1:X}u"
+        if flag_setter in ("and", "or", "xor", "test"):
+            of = "0"
+        elif flag_setter == "neg":
+            of = f"((((uint32_t){lhs}) & {mask}) == {sign})"
+        elif rhs is None:
+            return None
+        else:
+            if flag_setter == "cmp":
+                a, b = f"((uint32_t)({lhs}) & {mask})", f"((uint32_t)({rhs}) & {mask})"
+                r = f"(({a} - {b}) & {mask})"
+            elif flag_setter == "sub":
+                r, b = f"((uint32_t)({lhs}) & {mask})", f"((uint32_t)({rhs}) & {mask})"
+                a = f"(({r} + {b}) & {mask})"
+            else:  # add
+                r, b = f"((uint32_t)({lhs}) & {mask})", f"((uint32_t)({rhs}) & {mask})"
+                a = f"(({r} - {b}) & {mask})"
+            if flag_setter == "add":
+                of = f"(((~({a} ^ {b})) & ({a} ^ {r}) & {sign}) != 0)"
+            else:
+                of = f"(((({a}) ^ ({b})) & (({a}) ^ ({r})) & {sign}) != 0)"
+        return (of if jcc == "jo" else f"!{of}"), desc
 
     # ── comiss/ucomiss: float comparison, sets CF/ZF/PF ──
     if flag_setter in ("comiss", "comisd", "ucomiss", "ucomisd"):
@@ -812,6 +879,8 @@ def _make_condition(jcc, flag_setter, flag_ops):
 
     # ── adc/sbb: result-based (like add/sub but with carry) ──
     if flag_setter in ("adc", "sbb"):
+        if jcc in ("jo", "jno"):
+            return ("(_fb != 0)" if jcc == "jo" else "(_fb == 0)"), desc
         if jcc in ("je", "jz"):
             return f"({lhs} == 0)", desc
         if jcc in ("jne", "jnz"):
@@ -935,6 +1004,14 @@ def _make_condition(jcc, flag_setter, flag_ops):
         # rcl/rcr leave their carry-out in _cf (RC_ROT writes it back), and
         # _function_needs_cf declares _cf for any function containing them.
         if flag_setter in ("rcl", "rcr"):
+            if jcc in ("jb", "jnae", "jc"):
+                return "_cf", desc
+            if jcc in ("jae", "jnb", "jnc"):
+                return "!_cf", desc
+        # rol/ror: CF is the bit that went round -- the result's low bit after
+        # rol, its top bit after ror (the arcade 68000 cores' ROL/ROR read it
+        # with setb). A zero count leaves CF alone on x86; not modelled.
+        if flag_setter in ("rol", "ror"):
             if jcc in ("jb", "jnae", "jc"):
                 return "_cf", desc
             if jcc in ("jae", "jnb", "jnc"):
@@ -1315,6 +1392,7 @@ class Lifter:
         self.func_start = 0  # Set per-function by translator
         self.func_end = 0
         self.needs_cf = False  # Set per-function by translator (has adc/sbb)
+        self.needs_af = False  # Set per-function by translator (has daa/das)
         self.publishes_ebp = False  # Set per-function: has a real frame
         self.trace_exit_name = None  # Set per-function when traced
         self.force_return_value = None   # Set per-function by --force-return
@@ -1415,6 +1493,17 @@ class Lifter:
             return self._lift_push(insn, ops)
         if m == "pop":
             return self._lift_pop(insn, ops)
+        # PUSHAD/POPAD (capstone: pushal/popal): the eight registers, esp as it was before the first
+        # push; POPAD skips the saved esp. Hand-written assembly saves everything this way (Ninja Gaiden
+        # Black's arcade program: its CPU emulator's entry); as no-ops its registers came back wrong.
+        if m in ("pushal", "pushad"):
+            return ["{ uint32_t _sp0 = esp;",
+                    "  PUSH32(esp, eax); PUSH32(esp, ecx); PUSH32(esp, edx); PUSH32(esp, ebx);",
+                    "  PUSH32(esp, _sp0); PUSH32(esp, ebp); PUSH32(esp, esi); PUSH32(esp, edi); }"]
+        if m in ("popal", "popad"):
+            return ["{ uint32_t _skip;",
+                    "  POP32(esp, edi); POP32(esp, esi); POP32(esp, ebp); POP32(esp, _skip);",
+                    "  POP32(esp, ebx); POP32(esp, edx); POP32(esp, ecx); POP32(esp, eax); (void)_skip; }"]
 
         # ── Arithmetic ──
         if m in ("add", "sub", "and", "or", "xor"):
@@ -1427,6 +1516,10 @@ class Lifter:
             return self._lift_not(insn, ops)
         if m == "imul":
             return self._lift_imul(insn, ops)
+        if m == "mul":
+            return self._lift_mul(insn, ops)
+        if m in ("daa", "das"):
+            return self._lift_decimal_adjust(m)
         if m in ("mul", "div", "idiv"):
             return self._lift_muldiv(insn, ops, m)
         if m == "sbb":
@@ -1953,6 +2046,8 @@ class Lifter:
         out = []
         if m in _RESULT_SRC_SETTERS:
             out.append(self._result_snapshot(ops, m, src_too=True))
+            if self.needs_af:
+                out.append(f"_af = (int)(((({dst}) ^ ({src}) ^ ({expr})) >> 4) & 1);")
         if self.needs_cf:
             # CF must be computed from the pre-write operands.
             if m == "add":
@@ -2012,12 +2107,15 @@ class Lifter:
         # sbb reg, reg is a common idiom: result is 0 or 0xFFFFFFFF depending on CF
         if ops[0].type == "reg" and ops[1].type == "reg" and ops[0].reg == ops[1].reg:
             return [_fmt_operand_write(ops[0], "_cf ? 0xFFFFFFFF : 0")
-                    + " /* sbb self (CF extend) */",
+                    + " _fb = 0; /* sbb self (CF extend), OF clear */",
                     self._result_snapshot(ops, "sbb")]
         w = (_operand_width(ops[0]) or 4) * 8
+        af = (" _af = (int)(((%s ^ %s ^ (uint32_t)_t) >> 4) & 1);" % (dst, src)) if self.needs_af else ""
+        # OF into _fb (the snapshot's free half here), for seto/jo.
+        of = " _fb = (uint32_t)(((((uint32_t)(%s) ^ (uint32_t)(%s)) & ((uint32_t)(%s) ^ (uint32_t)_t)) >> %d) & 1);" % (dst, src, dst, w - 1)
         return ["{ uint64_t _t = (uint64_t)(%s) - (uint64_t)(%s) - (uint64_t)_cf;"
-                " _cf = (int)((_t >> %d) & 1); %s }  /* sbb */"
-                % (dst, src, w, _fmt_operand_write(ops[0], "(uint32_t)_t")),
+                " _cf = (int)((_t >> %d) & 1);%s%s %s }  /* sbb */"
+                % (dst, src, w, af, of, _fmt_operand_write(ops[0], "(uint32_t)_t")),
                 self._result_snapshot(ops, "sbb")]
 
     def _lift_adc(self, insn, ops):
@@ -2027,9 +2125,11 @@ class Lifter:
         dst = _fmt_operand_read(ops[0])
         src = _fmt_operand_read(ops[1])
         w = (_operand_width(ops[0]) or 4) * 8
+        af = (" _af = (int)(((%s ^ %s ^ (uint32_t)_t) >> 4) & 1);" % (dst, src)) if self.needs_af else ""
+        of = " _fb = (uint32_t)(((~((uint32_t)(%s) ^ (uint32_t)(%s)) & ((uint32_t)(%s) ^ (uint32_t)_t)) >> %d) & 1);" % (dst, src, dst, w - 1)
         return ["{ uint64_t _t = (uint64_t)(%s) + (uint64_t)(%s) + (uint64_t)_cf;"
-                " _cf = (int)((_t >> %d) & 1); %s }  /* adc */"
-                % (dst, src, w, _fmt_operand_write(ops[0], "(uint32_t)_t")),
+                " _cf = (int)((_t >> %d) & 1);%s%s %s }  /* adc */"
+                % (dst, src, w, af, of, _fmt_operand_write(ops[0], "(uint32_t)_t")),
                 self._result_snapshot(ops, "adc")]
 
     def _lift_double_shift(self, insn, ops, m):
@@ -2076,26 +2176,81 @@ class Lifter:
     def _lift_shrd(self, insn, ops):
         return self._lift_double_shift(insn, ops, "shrd")
 
+    # The one-operand forms by width, as the hardware has them: AL * r/m8 into
+    # AX, AX * r/m16 into DX:AX, EAX * r/m32 into EDX:EAX. Everything used to go
+    # through the 32-bit form, so `imul dx` (the arcade 68000 cores' MULS.W)
+    # multiplied all of EAX by an unsigned DX and wrote all of EDX. _fb gets
+    # CF = OF ("the product did not fit in the low half"), _fa the low half.
+    def _lift_mul_one(self, ops, signed):
+        src = _fmt_operand_read(ops[0])
+        w = _operand_width(ops[0]) or 4
+        m = "imul" if signed else "mul"
+        if w == 1:
+            if signed:
+                mul = "(int32_t)(int8_t)LO8(eax) * (int32_t)(int8_t)(%s)" % src
+                fit = "(_r != (int32_t)(int8_t)_r)"
+            else:
+                mul = "(uint32_t)LO8(eax) * (uint32_t)(uint8_t)(%s)" % src
+                fit = "((_r >> 8) != 0)"
+            t = "int32_t" if signed else "uint32_t"
+            return ["{ %s _r = %s; SET_LO16(eax, (uint32_t)_r);" % (t, mul),
+                    "  _fa = (uint32_t)_r & 0xFFu; _fas = (int32_t)(int8_t)_fa; _fb = %s; } /* %s r/m8 */" % (fit, m)]
+        if w == 2:
+            if signed:
+                mul = "(int32_t)(int16_t)LO16(eax) * (int32_t)(int16_t)(%s)" % src
+                fit = "(_r != (int32_t)(int16_t)_r)"
+            else:
+                mul = "(uint32_t)LO16(eax) * (uint32_t)(uint16_t)(%s)" % src
+                fit = "((_r >> 16) != 0)"
+            t = "int32_t" if signed else "uint32_t"
+            return ["{ %s _r = %s; SET_LO16(eax, (uint32_t)_r); SET_LO16(edx, (uint32_t)_r >> 16);" % (t, mul),
+                    "  _fa = (uint32_t)_r & 0xFFFFu; _fas = (int32_t)(int16_t)_fa; _fb = %s; } /* %s r/m16 */" % (fit, m)]
+        if signed:
+            return [f"{{ int64_t _r = (int64_t)(int32_t)eax * (int64_t)(int32_t){src};",
+                    f"  eax = (uint32_t)_r; edx = (uint32_t)(_r >> 32);"
+                    f" _fa = eax; _fas = (int32_t)eax; _fb = (_r != (int64_t)(int32_t)_r); }}"]
+        return [f"{{ uint64_t _r = (uint64_t)eax * (uint64_t){src};",
+                f"  eax = (uint32_t)_r; edx = (uint32_t)(_r >> 32);"
+                f" _fa = eax; _fas = (int32_t)eax; _fb = (edx != 0); }}"]
+
+    def _lift_mul(self, insn, ops):
+        if len(ops) < 1:
+            return ["/* mul: no operand */"]
+        return self._lift_mul_one(ops, signed=False)
+
     def _lift_imul(self, insn, ops):
         nops = len(ops)
         if nops == 1:
-            # One operand: edx:eax = eax * ops[0]
-            src = _fmt_operand_read(ops[0])
-            return [
-                f"{{ int64_t _r = (int64_t)(int32_t)eax * (int64_t)(int32_t){src};",
-                f"  eax = (uint32_t)_r; edx = (uint32_t)(_r >> 32); }}"
-            ]
-        elif nops == 2:
-            # Two operand: dst = dst * src
-            dst = _fmt_operand_read(ops[0])
-            src = _fmt_operand_read(ops[1])
-            return [_fmt_operand_write(ops[0], f"(uint32_t)((int32_t){dst} * (int32_t){src})")]
-        elif nops == 3:
-            # Three operand: dst = src1 * imm
-            src = _fmt_operand_read(ops[1])
-            imm = _fmt_operand_read(ops[2])
-            return [_fmt_operand_write(ops[0], f"(uint32_t)((int32_t){src} * (int32_t){imm})")]
+            return self._lift_mul_one(ops, signed=True)
+        if nops in (2, 3):
+            # dst = dst * src, or dst = src1 * imm, truncated to the width; OF/CF
+            # when the full signed product does not fit it.
+            a = _fmt_operand_read(ops[0] if nops == 2 else ops[1])
+            b = _fmt_operand_read(ops[1] if nops == 2 else ops[2])
+            w = _operand_width(ops[0]) or 4
+            sx = {1: "(int8_t)", 2: "(int16_t)", 4: "(int32_t)"}[w]
+            mask = self._SNAP_MASK[w]
+            return [f"{{ int64_t _r = (int64_t){sx}({a}) * (int64_t){sx}({b});",
+                    f"  {_fmt_operand_write(ops[0], '(uint32_t)_r')}",
+                    f"  _fa = (uint32_t)_r & {mask}; _fas = (int32_t){sx}(_fa);"
+                    f" _fb = (_r != (int64_t){sx}_r); }} /* imul */"]
         return ["/* imul: unexpected form */"]
+
+    # DAA/DAS, as the Intel manual spells them. AF comes from the add/sub/adc/
+    # sbb before (the lift writes _af beside those when the function has one of
+    # these). The arcade 68000 cores' ABCD/SBCD are adc/sbb + daa/das: without
+    # them a BCD counter going 90 -> 89 showed 8F, 8E... (the arcade's timer).
+    def _lift_decimal_adjust(self, m):
+        op = "+" if m == "daa" else "-"
+        if m == "daa":
+            low_cf = "(_al + 6u) > 0xFFu"
+        else:
+            low_cf = "_al < 6u"
+        hi = "_cf = 1;" if m == "das" else "_cf = 1; } else { _cf = 0;"
+        return ["{ uint32_t _al = LO8(eax), _old = _al; int _ocf = _cf; _cf = 0;",
+                f"  if ((_al & 0xFu) > 9u || _af) {{ _cf = _ocf || ({low_cf}); _al = (_al {op} 6u) & 0xFFu; _af = 1; }} else _af = 0;",
+                f"  if (_old > 0x99u || _ocf) {{ _al = (_al {op} 0x60u) & 0xFFu; {hi} }}",
+                f"  SET_LO8(eax, _al); _fa = _al; _fas = (int32_t)(int8_t)_al; }} /* {m} */"]
 
     def _lift_muldiv(self, insn, ops, m):
         if len(ops) < 1:
@@ -2230,7 +2385,15 @@ class Lifter:
         bits = (_operand_width(ops[0]) or 4) * 8
         suffix = {8: "8", 16: "16"}.get(bits, "32")
         func = ("ROL" if m == "rol" else "ROR") + suffix
-        return [_fmt_operand_write(ops[0], f"{func}({dst}, {cnt})")]
+        out = [_fmt_operand_write(ops[0], f"{func}({dst}, {cnt})")]
+        if self.needs_cf:
+            # CF: the bit that went round (low bit after rol, top after ror);
+            # a count of zero (after the 5-bit mask) leaves it alone.
+            res = _fmt_operand_read(ops[0])
+            bit = (f"((uint32_t)({res}) & 1u)" if m == "rol"
+                   else f"(((uint32_t)({res}) >> {bits - 1}) & 1u)")
+            out.append(f"if (({cnt}) & 31) _cf = (int){bit}; /* {m} CF */")
+        return out
 
     # ── Compare / Test (standalone) ──
 
@@ -3986,7 +4149,7 @@ def lift_basic_block(lifter, bb, flag_state=None):
 
         if (curr.mnemonic in ("sete", "setne", "setb", "setae", "setbe",
                               "seta", "setl", "setge", "setle", "setg",
-                              "sets", "setns")
+                              "sets", "setns", "seto", "setno")
                 and last_flag_setter and len(curr.operands) >= 1):
             cond = _make_setcc_value(
                 curr.mnemonic, last_flag_setter, last_flag_ops)
@@ -4057,6 +4220,10 @@ def lift_basic_block(lifter, bb, flag_state=None):
             last_flag_ops = list(curr.operands)
         elif curr.mnemonic in _SSE_CMP_NAMED:
             pass  # SSE compares write a mask, not EFLAGS
+        elif curr.mnemonic in ("clc", "stc", "cmc"):
+            # CF only, and it is in _cf (the lift writes it there): carry
+            # conditions after one read that.
+            last_flag_setter, last_flag_ops = "__cf_in_cf", []
         elif curr.mnemonic in FLAG_SETTERS:
             last_flag_setter, last_flag_ops = normalise_zero_test(
                 curr.mnemonic, list(curr.operands))

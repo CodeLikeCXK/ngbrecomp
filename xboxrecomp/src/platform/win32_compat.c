@@ -435,6 +435,13 @@ static void obj_release(w32_object *o)
     } else if (o->kind == K_FILEMAP) {
         if (o->fd >= 0) close(o->fd);
     } else if (o->kind == K_THREAD) {
+        /* Nothing joins a thread (a wait is on its object), so its stack and the rest of it were never
+         * given back: each thread the title started and ended kept its 8 MB stack, the pages it used
+         * counting -- the process grew by megabytes a minute (the file worker of each read). With the
+         * last reference gone nothing can name it again: detached, an ended thread is released now and
+         * one still on its way out (this is its own last reference) as it ends. */
+        if (o->thread_joinable)
+            pthread_detach(o->thread);
         host_sem_destroy(&o->park_sem);
         host_sem_destroy(&o->park_ack);
     } else if (o->kind == K_WAITABLE_TIMER) {

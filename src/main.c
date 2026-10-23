@@ -172,6 +172,16 @@ extern ptrdiff_t g_xbox_mem_offset;
 static bool s_use_gpu, s_headless;
 static bool s_widescreen;
 static char s_game_dir[4096];
+static char s_save_dir[4096];
+
+/* Before Return to Main Menu starts the program again (src/ingame_menu.c): the game folder in use where
+ * that start finds it -- unless NGB_GAME_DIR gave it, which the new process has too. */
+void ngb_keep_game_for_restart(void)
+{
+    const char *env = getenv("NGB_GAME_DIR");
+    if (s_save_dir[0] && s_game_dir[0] && !(env && *env))
+        ngb_remember_game(s_save_dir, s_game_dir);
+}
 static int s_show_settings;
 #define NGB_D3D_DEVICE_PTR 0x003D83C8u   /* D3D8LTCG global device pointer */
 
@@ -393,6 +403,31 @@ static LONG CALLBACK veh_handler(PEXCEPTION_POINTERS ep)
     fprintf(stderr, "             esi=%08X edi=%08X esp=%08X\n",
             g_esi, g_edi, g_esp);
     print_host_symbol((void *)(uintptr_t)cur_pc);
+    print_host_symbol((void *)(uintptr_t)ep->ContextRecord->Rip);
+#if !defined(_WIN32)
+    {   /* the host's call chain: a fault outside the lifted code (a driver, a layer) names its caller */
+        void *bt[48];
+        int n = backtrace(bt, 48);
+        FILE *mf = fopen("/proc/self/maps", "r");   /* which mapping the faulting instruction is in */
+        char line[512];
+        uintptr_t rip = (uintptr_t)ep->ContextRecord->Rip;
+        while (mf && fgets(line, sizeof line, mf)) {
+            unsigned long lo, hi;
+            if (sscanf(line, "%lx-%lx", &lo, &hi) == 2 && rip >= lo && rip < hi)
+                fprintf(stderr, "  RIP in mapping: %s", line);
+        }
+        if (mf)
+            fclose(mf);
+        {   /* a call through a bad pointer: its return address is the word at the stack pointer */
+            uintptr_t rsp = (uintptr_t)ep->ContextRecord->Rsp;
+            fprintf(stderr, "  RSP=0x%llX, return address there:\n", (unsigned long long)rsp);
+            print_host_symbol(*(void **)rsp);
+        }
+        fprintf(stderr, "  host backtrace:\n");
+        fflush(stderr);
+        backtrace_symbols_fd(bt, n, fileno(stderr));
+    }
+#endif
     print_guest_stack();
     fflush(stderr);
     return EXCEPTION_CONTINUE_SEARCH;
@@ -713,8 +748,10 @@ static void choose_renderer(void)
     set_default("NGB_RENDERER", "d3d");   /* read again by src/d3d (d3d.c, hle.cpp, vk/backend.cpp) */
 #endif
     const char *r_cur = getenv("NGB_RENDERER");
-    if (r_cur && (!strcmp(r_cur, "d3d") || !strcmp(r_cur, "dx12") || !strcmp(r_cur, "d3d12")) && !getenv("NGB_D3D_KEEP_NV2A"))
+    if (r_cur && (!strcmp(r_cur, "d3d") || !strcmp(r_cur, "dx12") || !strcmp(r_cur, "d3d12")) && !getenv("NGB_D3D_KEEP_NV2A")) {
         set_default("NV2A_NO_PREWARM", "1");   /* xemu's renderer draws nothing: none of its pipelines */
+        set_default("NV2A_NO_DRAWS", "1");     /* nor its buffers for drawing (#73) */
+    }
 #endif
     const char *r = getenv("NGB_RENDERER");
 #if defined(NGB_NV2A_VK)
@@ -811,6 +848,9 @@ static void *guest_main(void *unused)
         g_apu_state = mcpx_apu_init_standalone((uint8_t *)xbox_GetMemoryBase());
         fprintf(stderr, "[BOOT] emulated APU %s\n",
                 g_apu_state ? "up" : "FAILED to initialise");
+        extern int ngb_pc_setting(int which);
+        extern void mcpx_apu_set_hrtf(int on);
+        mcpx_apu_set_hrtf(ngb_pc_setting(23));   /* Positional Audio (#30), on unless turned off */
     }
 
     xbox_kernel_init();
@@ -1187,6 +1227,7 @@ int main(int argc, char **argv)
         if (ngb_find_game(argc > 1 ? argv[1] : NULL, save, base,
                           s_game_dir, sizeof(s_game_dir)) != 0)
             return 1;
+        snprintf(s_save_dir, sizeof s_save_dir, "%s", save);
     }
 
     printf("=== Ninja Gaiden Black - Static Recompilation ===\n");
@@ -1354,6 +1395,10 @@ int main(int argc, char **argv)
                            cfg.vsync) != 0) {
         fprintf(stderr, "Cannot open the game window.\n");
         return 1;
+    }
+    {   /* XLaunchNewImage: the arcade cabinet's NES Ninja Gaiden is another program (src/launch.c, #18) */
+        extern void ngb_launch_init(const char *game_dir, const char *save_dir, int width, int height, int fullscreen);
+        ngb_launch_init(s_game_dir, s_save_dir, cfg.width, cfg.height, cfg.fullscreen);
     }
     /* Controllers and keyboard, on the thread that pumps the window's
      * events (hotplug arrives there too). */

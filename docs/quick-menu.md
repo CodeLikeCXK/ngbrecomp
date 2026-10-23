@@ -7,11 +7,14 @@ and sounds come from Black; the camera fixes are a separate modification.
 
 With the menu closed, Up always opens Melee Weapons and Down always opens
 Consumables, regardless of the last category used. The same applies to the
-actions' keyboard bindings (Up/1 and Down/2 by default). Only those two
-actions can open the menu. Left/Right (including rebound Previous/Next
-actions) selects entries only while the menu is open. Once open, Up/Down changes
-category; Left/Right changes selection; A confirms and B
-cancels. Keyboard defaults are Up/Down (also 1/2), Left/Right, Enter and
+actions' keyboard bindings (Up/1 and Down/2 by default). Left/Right (including
+rebound Previous/Next actions) open Melee Weapons on the card before or the next
+one at once (held, they keep stepping, as inside the menu); in play the game
+does nothing with the d-pad. Once open, Up/Down changes
+category and Left/Right the card, a press going round; held, Up goes to Melee
+Weapons and Down to Consumables, and Left/Right step on to the first or last card
+and stop there; A confirms and B cancels. Each category opens on the card it
+was last left on, else on the equipped weapon or the last item used. Keyboard defaults are Up/Down (also 1/2), Left/Right, Enter and
 Escape/Backspace. The six actions are rebindable in Controls. Existing
 profiles keep their original four bindings; new confirm/cancel actions get
 their defaults. The old `quick_weapons` / `quick_items` keys now mean
@@ -42,10 +45,10 @@ brightness (two successive 33% reductions), preserving its alpha. Frames,
 icons, arrows and quantities are drawn afterward with their own colours.
 The runtime tint changes no game asset file.
 
-RECOMP SETTINGS -> Gameplay -> **Quick Menu** offers Off, 100%, 90% ... 10%:
+RECOMP SETTINGS -> Gameplay -> **Quick Menu** offers Off, 25%, 50%, 75%, 100%, 125%, 150%:
 off by default, and otherwise the menu's size. It saves as `quick_menu_scale`
 in settings.ini (a percentage, 0 for Off; missing or invalid values are Off;
-the old 75% and 25% choices migrate to 80% and 30%). Off disables opening,
+a size saved before, in tens, is the nearest quarter). Off disables opening,
 rendering, pause and modal input capture. Pending commands/open requests are
 discarded and an owned pause reference is released, including when disabled
 while open. Re-enabling does not turn an already held direction into an
@@ -57,10 +60,12 @@ scale does not resize render targets or alter the game's render resolution.
 
 Only when Quick Menu Pause has unlocked does a GPU pass lightly blur and
 dim the background. Waiting for an action and Pause Off bypass that pass.
-The menu is drawn afterward and stays sharp. The pass downsamples the
-current display copy into a fixed 640 x 360 scratch image, then applies a
-nine-tap filter and 0.70 brightness. It never reads the frame back to the
-CPU, holds a screenshot, or waits for the whole GPU to idle.
+The menu is drawn afterward and stays sharp. The pass blits the current
+display copy to at most 1920 wide, averages it into a 640 x 360 image (each
+small pixel the whole area it covers, so nothing shimmers), blurs that with a
+Gaussian across and down (sigma 4 small pixels) and draws it back at 0.80
+brightness. It never reads the frame back to the CPU, holds a screenshot,
+or waits for the whole GPU to idle.
 
 ## Integration points
 

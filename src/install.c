@@ -1086,6 +1086,16 @@ static void remember_game(const char *save_dir, const char *installed, const cha
     }
 }
 
+/* Return to Main Menu starts the program again without its arguments: the folder it runs from kept
+ * where the next start finds it (#59: a folder picked at the start was asked for again; an image given
+ * on the command line would have been installed again). */
+void ngb_remember_game(const char *save_dir, const char *dir)
+{
+    char installed[4096];
+    snprintf(installed, sizeof installed, "%s/game", save_dir);
+    remember_game(save_dir, installed, dir);
+}
+
 int ngb_find_game(const char *arg, const char *save_dir, const char *exe_dir,
                   char *out, size_t n)
 {

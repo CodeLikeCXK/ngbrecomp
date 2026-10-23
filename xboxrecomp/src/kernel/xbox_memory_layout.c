@@ -673,6 +673,13 @@ static void *g_mcpx_regs = NULL;
  * faults, and the emulated APU owns those registers anyway. */
 static int g_apu_mmio_trapped = 0;
 
+/* Whether the MCPX aperture is mapped with the APU's registers trapped: then the GP/EP DSP memories
+ * above them are plain memory the APU model may write (apu_dsp.c). */
+int xbox_ApuMmioTrapped(void)
+{
+    return g_apu_mmio_trapped;
+}
+
 /*
  * GPU completion fences the title waits on in guest memory rather than in the
  * aperture. See xbox_Nv2aMirrorFence in the header for why this is the same

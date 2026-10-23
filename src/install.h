@@ -11,6 +11,7 @@ extern "C" {
  * folder, disc image or archive -- installed on first use), NGB_GAME_DIR,
  * <save_dir>/game, or <exe_dir>game, else the setup window (ngb-setup) or a
  * file dialog. 0 on success. */
+void ngb_remember_game(const char *save_dir, const char *dir);   /* the folder found next start */
 int ngb_find_game(const char *arg, const char *save_dir, const char *exe_dir,
                   char *out, size_t n);
 

@@ -60,6 +60,9 @@ static unsigned s_pages;
 static int s_enabled;
 static volatile uint8_t s_dirty[DIRTY_MEMORY_NUM][MAX_PAGES];
 static volatile uint8_t s_prot[MAX_PAGES];
+/* Each page's writes as recorded, counted: for a reader that cannot clear a client's marks -- two
+ * textures on one page would each clear the other's (nv2a_dirty_stamp). */
+static volatile uint32_t s_seq[MAX_PAGES];
 /* Pages written over and over (dynamic vertex buffers, the CPU's ring of
  * per-frame data) cost a fault and two mprotects per draw if tracked. A page
  * that faults more than HOT_FAULTS times in one HOT_WINDOW_MS window is left
@@ -145,6 +148,7 @@ static int is_gpu_thread(void)
 
 static void mark_all(unsigned p, int surf)
 {
+    s_seq[p]++;
     for (int c = 0; c < DIRTY_MEMORY_NUM; c++)
         if (surf || (c != DIRTY_MEMORY_NV2A_SURF && c != DIRTY_MEMORY_NV2A_SURF_CPU))
             s_dirty[c][p] = 1;
@@ -394,8 +398,41 @@ void nv2a_dirty_set(hwaddr addr, hwaddr size, unsigned client)
     if (!size)
         return;
     for (unsigned p = (unsigned)(addr / PAGE);
-         p <= (unsigned)((addr + size - 1) / PAGE) && p < s_pages; p++)
+         p <= (unsigned)((addr + size - 1) / PAGE) && p < s_pages; p++) {
+        __atomic_add_fetch(&s_seq[p], 1, __ATOMIC_RELAXED);
         s_dirty[client][p] = 1;
+    }
+}
+
+/* The writes recorded on the pages of [host, host + len), summed, in *stamp; the pages are protected first,
+ * so a write after this call changes the next stamp. 0 when that cannot be known -- tracking off, memory
+ * outside the GPU's window, a page written so often it is left unprotected (hot) -- and the caller must
+ * look at the bytes. For the D3D renderer's textures (src/d3d/vk/backend.cpp): hashed whole once a frame
+ * each, they were most of its game-thread time in busy scenes (#69). */
+int nv2a_dirty_stamp(const void *host, size_t len, uint64_t *stamp)
+{
+    unsigned p0, p1;
+    uint64_t sum = 0;
+    int known = 1;
+
+    if (!s_enabled || !len || !page_of(host, &p0) || !page_of((const uint8_t *)host + len - 1, &p1) || p1 < p0)
+        return 0;
+    dirty_lock();
+    for (unsigned p = p0; p <= p1 && known; p++) {
+        if (s_hot[p]) {
+            known = 0;
+            break;
+        }
+        if (!s_prot[p]) {
+            s_prot[p] = 1;
+            if (!s_own[p])
+                protect_run(p, 1, PROT_READ);
+        }
+        sum += s_seq[p];
+    }
+    dirty_unlock();
+    *stamp = sum;
+    return known;
 }
 
 void nv2a_dirty_set_gpu_fault_handler(int (*fn)(hwaddr, hwaddr, int))

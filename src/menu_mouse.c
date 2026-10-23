@@ -3,8 +3,8 @@
  *
  * The menu engine's runner (sub_0017BB90: Options and the like), and the
  * text the menus write theirs with (sub_001E86A0: the main menu, the pause
- * menu, the game's message boxes; not drawn in play or cutscenes), each
- * mark the frame when they run. Both are the lifted functions (listed in
+ * menu, the game's message boxes; in play only a prompt's first frame), each
+ * mark the frame when they run (the text when drawn frame after frame). Both are the lifted functions (listed in
  * src/manual_functions.json) renamed, behind a wrapper. The host knows from
  * it that the game is in a menu: there mouse clicks and the wheel are the
  * pad's buttons (src/ingame_menu.c).
@@ -81,9 +81,19 @@ int ngb_engine_row(void)
 
 void ngb_menu_font_init(void);   /* src/menu_font.c */
 
+/* Text drawn on and on: the menus redraw theirs every frame. Play's prompts ("Interact", the karma) draw
+ * once when they appear; marked as a menu, the keys and the controller left their bindings for 150 ms --
+ * F, bound to move, was Ninpo's Y then, a Special Attack walking up to a save statue (#71). */
+static uint64_t s_text_ms, s_text_since;
+
 void sub_001E86A0(void)
 {
-    ngb_menu_mark();
+    uint64_t now = now_ms();
+    if (now - s_text_ms > 100)
+        s_text_since = now;
+    s_text_ms = now;
+    if (now - s_text_since >= 50)
+        ngb_menu_mark();
     ngb_menu_font_init();
     menu_text();
 }

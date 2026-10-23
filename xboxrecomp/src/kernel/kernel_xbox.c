@@ -218,13 +218,25 @@ NTSTATUS __stdcall xbox_ExQueryNonVolatileSetting(
         }
         break;
 
-    default:
-        xbox_log(XBOX_LOG_WARN, XBOX_LOG_XBOX,
-            "ExQueryNonVolatileSetting: unhandled index 0x%02X", ValueIndex);
+    default: {
+        /* Said once an index: Ninja Gaiden Black asks for 0xFF three times a frame in places, and the
+         * line written and flushed each time filled the log (#69). */
+        static ULONG said[16];
+        static int nsaid;
+        int k = 0;
+        while (k < nsaid && said[k] != ValueIndex)
+            k++;
+        if (k == nsaid) {
+            if (nsaid < 16)
+                said[nsaid++] = ValueIndex;
+            xbox_log(XBOX_LOG_WARN, XBOX_LOG_XBOX,
+                "ExQueryNonVolatileSetting: unhandled index 0x%02X (said once)", ValueIndex);
+        }
         memset(Value, 0, ValueLength);
         if (Type) *Type = 4;
         if (ResultLength) *ResultLength = ValueLength;
         break;
+    }
     }
 
     return STATUS_SUCCESS;

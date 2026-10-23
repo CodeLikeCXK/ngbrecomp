@@ -83,11 +83,13 @@ void ngb_menu_set_running(const NgbSettings *s)
  * difficulty from the start (src/cheats.c, saved), 15 the golden scarabs
  * cheat, 16 every costume (saved), 17 an extra costume (0-3, saved), 18 Smoother
  * Glow (src/d3d/vk/glow_options.h), 19 quick-menu pause, 20 quick-menu scale (100..0
- * percent, in tens), 21 infinite items, 22 infinite projectiles (cheats, src/cheats.c). A change
+ * percent, in tens), 21 infinite items, 22 infinite projectiles (cheats, src/cheats.c), 23 positional
+ * audio (the APU's HRTF filters, #30), 24 the HUD (src/hud.c, #80). A change
  * applies at once (8 and 9 at the next start) and is saved, the cheats'
  * not. */
 int ngb_cheat(int which);
 void ngb_cheat_set(int which, int on);
+void mcpx_apu_set_hrtf(int on);           /* xboxrecomp/src/apu: positional audio (23) */
 void ngb_set_all_difficulties(int on);   /* src/cheats.c */
 void ngb_set_all_costumes(int on);
 
@@ -124,6 +126,8 @@ int ngb_pc_setting(int which)
     case 18: return s_running.smooth_glow;
     case 19: return s_running.quick_menu_freeze;
     case 20: return s_running.quick_menu_scale;
+    case 23: return s_running.positional_audio;
+    case 24: return s_running.show_hud;
     default: return s_running.show_fps;
     }
 }
@@ -154,6 +158,8 @@ void ngb_pc_set_setting(int which, int value)
     case 8: s_running.skip_intro = value; break;        /* both at the next start */
     case 9: s_running.show_launcher = value; break;
     case 18: s_running.smooth_glow = !!value; break;
+    case 23: s_running.positional_audio = !!value; mcpx_apu_set_hrtf(value); break;
+    case 24: s_running.show_hud = !!value; break;
     case 6:
         if (value / 8 == s_running.aspect && value % 8 < ngb_settings_size_count(value / 8)) {
             ngb_settings_size_at(value / 8, value % 8, &s_running.width, &s_running.height);
@@ -515,8 +521,12 @@ void ngb_restart_to_menu(void)
     __atomic_store_n(&s_soft_reset_at, mono_ms(), __ATOMIC_RELEASE);
 }
 
+void ngb_keep_game_for_restart(void);   /* src/main.c */
+
+/* Started again without the arguments (the game found as at any start: the folder kept, #59) */
 static void restart_program(void)
 {
+    ngb_keep_game_for_restart();
 #if !defined(_WIN32)
     char self[4096];
     long n = ngb_exe_path(self, sizeof self);
@@ -527,7 +537,8 @@ static void restart_program(void)
         fflush(stderr);
         close_on_exec_all();
         quiet_signals();
-        execv(self, s_argv);
+        char *args[2] = { s_argv[0], NULL };
+        execv(self, args);
         fprintf(stderr, "[MENU] could not start again; exiting\n");
     }
 #else
@@ -542,7 +553,9 @@ static void restart_program(void)
         if (GetModuleFileNameW(NULL, self, MAX_PATH) && SetEnvironmentVariableA("NGB_TO_MAIN_MENU", "1")) {
             fprintf(stderr, "[MENU] Return to Main Menu: starting the program again\n");
             fflush(stderr);
-            if (CreateProcessW(self, GetCommandLineW(), NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+            static wchar_t line[MAX_PATH + 3];
+            swprintf(line, MAX_PATH + 3, L"\"%ls\"", self);   /* the program alone */
+            if (CreateProcessW(self, line, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
                 CloseHandle(pi.hThread);
                 CloseHandle(pi.hProcess);
                 TerminateProcess(GetCurrentProcess(), 0);
@@ -645,7 +658,7 @@ static int tab_hit(float x, float y, int *zone)
     default: return ngb_pause_tab_hit(x, y, zone);
     }
 }
-#define TAB_ROW 0x100
+#define TAB_ROW 0x10000   /* | the row (src/pause_tab.c's K_ROW): past a byte */
 
 /* Presses for the game's pad, played out a frame at a time (render
  * thread) so that each is seen: held 90 ms, then 60 ms let go. Low byte

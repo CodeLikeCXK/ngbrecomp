@@ -83,10 +83,12 @@ static const Action s_act[A_COUNT] = {
     /* Keep the four original setting names and IDs for existing profiles. */
     { "Quick Menu: Category Up", "quick_weapons", "Opens Melee Weapons; while open, selects the previous category.", SDL_SCANCODE_UP, SDL_SCANCODE_1, P(P_DU), T_HOST, 1, 0 },
     { "Quick Menu: Category Down", "quick_items", "Opens Consumables; while open, selects the next category.", SDL_SCANCODE_DOWN, SDL_SCANCODE_2, P(P_DD), T_HOST, 2, 0 },
-    { "Quick Menu: Previous", "quick_left", "Selects the previous entry while the quick menu is open.", SDL_SCANCODE_LEFT, 0, P(P_DL), T_HOST, 4, 0 },
-    { "Quick Menu: Next", "quick_right", "Selects the next entry while the quick menu is open.", SDL_SCANCODE_RIGHT, 0, P(P_DR), T_HOST, 8, 0 },
+    { "Quick Menu: Previous", "quick_left", "Opens the melee weapons on the card before; while open, selects the previous entry.", SDL_SCANCODE_LEFT, 0, P(P_DL), T_HOST, 4, 0 },
+    { "Quick Menu: Next", "quick_right", "Opens the melee weapons on the next card; while open, selects the next entry.", SDL_SCANCODE_RIGHT, 0, P(P_DR), T_HOST, 8, 0 },
     { "Quick Menu: Confirm", "quick_confirm", "Equips the selected weapon or Ninpo, or uses the selected item.", SDL_SCANCODE_RETURN, 0, P(P_A), T_HOST, 16, 0 },
     { "Quick Menu: Cancel", "quick_cancel", "Closes the quick menu without applying the selection.", SDL_SCANCODE_ESCAPE, SDL_SCANCODE_BACKSPACE, P(P_B), T_HOST, 32, 0 },
+    { "Toggle HUD", "toggle_hud", "Shows or hides the HUD (Display & Audio > HUD). Not bound unless chosen.", 0, 0, 0, T_HOST,
+      NGB_BIND_HUD_BIT, 0 },
 };
 
 static int s_bind[A_COUNT][3];
@@ -103,6 +105,81 @@ static const char *const s_mouse_name[6] = { "", "Mouse Left", "Mouse Middle", "
 const char *ngb_bind_name(int a) { return a >= 0 && a < A_COUNT ? s_act[a].name : ""; }
 const char *ngb_bind_help(int a) { return a >= 0 && a < A_COUNT ? s_act[a].help : ""; }
 int ngb_bind_pad_fixed(int a) { return a >= 0 && a < A_COUNT && s_act[a].kind == T_AXIS; }
+
+/* What the controller always has for an action that is two buttons together on the Xbox (Ninpo: Y + B, Wind
+ * Run: X + A), whatever button it is also bound to; NULL for the others (src/pause_tab.c shows it in an
+ * empty controller slot, #75). */
+/* ---------- the game's own Button Settings ----------
+ *
+ * The game gives each controller button an action in its options (Options > Controller > Button
+ * Settings): ten entries at 0xDB9380 + 0xA0 -- A, B, X, Y, Black, White, LT, RT, then X + A and Y + B --
+ * each an action 0-10: not used, Ninpo, Wind Run, Jump, Projectile Weapon, Attack, Special Attack,
+ * Guard, Center Camera, Display Map, Karma Window (the menu's text order, sub_0021D970). Ours bind
+ * a key or a controller button to an action; the Xbox button that action takes is the one the game's
+ * table gives it now, so a change there does not move what our bindings do. */
+#define GAME_BUTTONS 0xDB9420u
+static const unsigned char s_game_default[10] = { 3, 4, 5, 6, 9, 10, 7, 8, 2, 1 };
+extern ptrdiff_t g_xbox_mem_offset;
+
+static void game_buttons(unsigned char out[10])
+{
+    memcpy(out, s_game_default, 10);
+    if (!g_xbox_mem_offset)
+        return;
+    const uint32_t *t = (const uint32_t *)((uintptr_t)GAME_BUTTONS + g_xbox_mem_offset);
+    unsigned char v[10];
+    int any = 0;
+    for (int i = 0; i < 10; i++) {
+        if (t[i] > 10)
+            return;                                  /* not the options (yet) */
+        v[i] = (unsigned char)t[i];
+        any |= v[i];
+    }
+    if (any)
+        memcpy(out, v, 10);
+}
+
+/* The game's action for one of ours (by the button it has by default), or -1. */
+static int game_action(const Action *t)
+{
+    if (t->kind == T_AN2)
+        return t->a == XBOX_BUTTON_Y ? 1 : 2;        /* Ninpo (Y + B), Wind Run (X + A) */
+    if (t->kind == T_AN && t->a < 8)
+        return s_game_default[t->a];
+    return -1;
+}
+
+/* Where the game has that action now: 0-7 a button (the analog index), 8 X + A, 9 Y + B; -1 nowhere. */
+static int game_slot(const Action *t, const unsigned char tab[10])
+{
+    int id = game_action(t);
+    if (id < 0)
+        return -1;
+    for (int i = 0; i < 10; i++)
+        if (tab[i] == id)
+            return i;
+    return -1;
+}
+
+static int game_buttons_default(void)
+{
+    unsigned char tab[10];
+    game_buttons(tab);
+    return !memcmp(tab, s_game_default, 10);
+}
+
+/* What the controller always has for an action that is two buttons together in the game's Button Settings
+ * (by default Ninpo: Y + B, Wind Run: X + A), whatever button it is also bound to; NULL for the others
+ * (src/pause_tab.c shows it in an empty controller slot, #75). */
+const char *ngb_bind_pad_combo(int a)
+{
+    if (a < 0 || a >= A_COUNT)
+        return NULL;
+    unsigned char tab[10];
+    game_buttons(tab);
+    int slot = game_slot(&s_act[a], tab);
+    return slot == 8 ? "X + A" : slot == 9 ? "Y + B" : NULL;
+}
 unsigned ngb_bind_generation(void) { return s_gen; }
 
 static void identity_check(void)
@@ -118,11 +195,13 @@ static void identity_check(void)
  * (controls.ini; #33 #63 #23) */
 static int s_invert[2][2];
 static int s_third_start;
+static int s_mouse_pct = 100;   /* Camera Sensitivity, percent: the right stick, mouse and keys (#67) */
 
 void ngb_bind_defaults(void)
 {
     memset(s_invert, 0, sizeof s_invert);
     s_third_start = 0;
+    s_mouse_pct = 100;
     for (int a = 0; a < A_COUNT; a++) {
         s_bind[a][0] = s_act[a].key0;
         s_bind[a][1] = s_act[a].key1;
@@ -241,6 +320,7 @@ static void save(void)
     fprintf(f, "invert_camera_x = %d\ninvert_camera_y = %d\n", s_invert[0][0], s_invert[0][1]);
     fprintf(f, "invert_first_person_x = %d\n", s_invert[1][0]);
     fprintf(f, "third_person_on_load = %d\n", s_third_start);
+    fprintf(f, "mouse_sensitivity = %d\n", s_mouse_pct);
     fclose(f);
 }
 
@@ -269,6 +349,12 @@ void ngb_bind_load(void)
         }
         if (!strcmp(key, "third_person_on_load")) {
             s_third_start = atoi(val) != 0;
+            continue;
+        }
+        if (!strcmp(key, "mouse_sensitivity")) {
+            int v = atoi(val);
+            v = (v + 12) / 25 * 25;
+            s_mouse_pct = v < 25 ? 25 : v > 300 ? 300 : v;
             continue;
         }
         for (int a = 0; a < A_COUNT; a++) {
@@ -378,13 +464,18 @@ static void press(XBOX_INPUT_STATE *st, const Action *t, int v, int axes[4])
             st->Gamepad.wButtons |= t->a;
         break;
     case T_AN2:
-        if (v > an[t->b])
-            an[t->b] = (BYTE)v;
-        /* fall through */
-    case T_AN:
-        if (v > an[t->a])
-            an[t->a] = (BYTE)v;
+    case T_AN: {   /* the button (or the two) the game's Button Settings give this action now */
+        unsigned char tab[10];
+        game_buttons(tab);
+        int slot = game_slot(t, tab);
+        int b0 = slot < 0 ? -1 : slot < 8 ? slot : slot == 8 ? XBOX_BUTTON_X : XBOX_BUTTON_Y;
+        int b1 = slot == 8 ? XBOX_BUTTON_A : slot == 9 ? XBOX_BUTTON_B : -1;
+        if (b0 >= 0 && v > an[b0])
+            an[b0] = (BYTE)v;
+        if (b1 >= 0 && v > an[b1])
+            an[b1] = (BYTE)v;
         break;
+    }
     case T_AXIS:
         if (v > 30)
             axes[t->a] += t->b ? -32767 : 32767;
@@ -427,7 +518,50 @@ void ngb_bind_set_third_person_start(int on)
     save();
 }
 
-/* The right stick as the player wants the camera turned (in play only), for the view it turns now. */
+/* Camera Sensitivity: 25 to 300 percent in quarters; a step up or down (round) */
+int ngb_bind_mouse_sensitivity(void)
+{
+    ensure();
+    return s_mouse_pct;
+}
+
+void ngb_bind_step_mouse_sensitivity(int dir)
+{
+    static const int steps[] = { 25, 50, 75, 100, 125, 150, 175, 200, 225, 250, 275, 300 };
+    const int n = (int)(sizeof steps / sizeof steps[0]);
+    ensure();
+    int i = 0;
+    while (i < n - 1 && steps[i] < s_mouse_pct)
+        i++;
+    s_mouse_pct = steps[(i + (dir < 0 ? n - 1 : 1)) % n];
+    s_gen++;
+    save();
+}
+
+/* Camera Sensitivity on one axis of the right stick: the part past where the game's camera starts to
+ * turn, scaled. Measured (0.6 s, in play): 14078 turns 0 degrees, 20308 20, 26537 85, 32767 113 -- the
+ * camera starts at about 18400, below it nothing. Below that the stick is left alone (a controller's
+ * stick at rest is not quite 0). */
+#define CAMERA_START 18000
+int ngb_bind_camera_start(void) { return CAMERA_START; }   /* src/keyboard.c: where the mouse starts */
+float ngb_bind_camera_boost(void)
+{
+    ensure();
+    return s_mouse_pct > 100 ? s_mouse_pct / 100.0f : 1.0f;
+}
+/* Up to 100%: the stick past where the camera starts, scaled down. Over 100%: the stick as it is, and the
+ * cameras' turn multiplied (src/camera.c): a full stick is already the game's top speed. */
+static int camera_scale(int v)
+{
+    int m = v < 0 ? -v : v;
+    if (s_mouse_pct >= 100 || m <= CAMERA_START)
+        return v;
+    m = CAMERA_START + (m - CAMERA_START) * s_mouse_pct / 100;
+    return v < 0 ? -m : m;
+}
+
+/* The right stick as the player wants the camera turned (in play only), for the view it turns now:
+ * inverted, and at the Camera Sensitivity -- the controller's, the mouse's and the keys' alike. */
 static void apply_invert(XBOX_INPUT_STATE *st)
 {
     extern int ngb_camera_first_person(void);   /* src/camera.c */
@@ -436,6 +570,16 @@ static void apply_invert(XBOX_INPUT_STATE *st)
         st->Gamepad.sThumbRX = clamp_axis(-(int)st->Gamepad.sThumbRX);
     if (inv[1])
         st->Gamepad.sThumbRY = clamp_axis(-(int)st->Gamepad.sThumbRY);
+    int rx = st->Gamepad.sThumbRX;
+    st->Gamepad.sThumbRX = clamp_axis(camera_scale(st->Gamepad.sThumbRX));
+    st->Gamepad.sThumbRY = clamp_axis(camera_scale(st->Gamepad.sThumbRY));
+    static const char *log = (const char *)1;          /* NGB_CAMERA_SENS_LOG=1: the stick before and after */
+    if (log == (const char *)1) log = getenv("NGB_CAMERA_SENS_LOG");
+    if (log && rx) {
+        static int n;
+        if (n++ % 30 == 0)
+            fprintf(stderr, "[CAMERA] sensitivity %d%%: right stick x %d -> %d\n", s_mouse_pct, rx, st->Gamepad.sThumbRX);
+    }
 }
 
 /* The keyboard and mouse in play (src/keyboard.c): the pad as their bindings press it. */
@@ -507,7 +651,8 @@ void xbox_pad_remap(XBOX_INPUT_STATE *st)
         return;
     apply_invert(st);
     int quick = ngb_quick_controls_active();
-    if (!quick && (s_pad_identity || getenv("NGB_NO_PAD_REMAP")))
+    /* The controller as it is when nothing is rebound -- here or in the game's own Button Settings. */
+    if (!quick && ((s_pad_identity && game_buttons_default()) || getenv("NGB_NO_PAD_REMAP")))
         return;
     int v[P_COUNT], axes[4] = { 0 };
     pad_inputs(st, v);

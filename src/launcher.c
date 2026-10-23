@@ -94,18 +94,26 @@ static void snap_size(NgbSettings *s)
 
 void ngb_settings_snap_size(NgbSettings *s) { snap_size(s); }
 
+/* The quick menu's size: 25 to 150 percent in quarters, or 0 (Off). A size saved before (in tens) is the
+ * nearest quarter. */
 int ngb_quick_scale_value(int v)
 {
-    /* Preserve the nearest size from the earlier 25-percent choices. */
-    if (v == 25) return 30;
-    if (v == 75) return 80;
-    return v >= 0 && v <= 100 && v % 10 == 0 ? v : 0;
+    if (v <= 0 || v > 150)
+        return 0;
+    int q = (v + 12) / 25 * 25;
+    return q < 25 ? 25 : q;
 }
 
 int ngb_quick_scale_step(int v, int dir)
 {
-    int i = (100 - ngb_quick_scale_value(v)) / 10;
-    return 100 - ((i + (dir < 0 ? 10 : 1)) % 11) * 10;
+    /* the choices in order, and round */
+    static const int order[] = { 150, 125, 100, 75, 50, 25, 0 };
+    const int n = (int)(sizeof order / sizeof order[0]);
+    int i = 0;
+    v = ngb_quick_scale_value(v);
+    while (i < n - 1 && order[i] != v)
+        i++;
+    return order[(i + (dir < 0 ? n - 1 : 1)) % n];
 }
 
 void ngb_settings_load(NgbSettings *s)
@@ -130,6 +138,8 @@ void ngb_settings_load(NgbSettings *s)
     s->msaa = 1;
     s->shadow_scale = 4;
     s->quick_menu_freeze = 1;
+    s->positional_audio = 1;
+    s->show_hud = 1;  /* the console's HRTF placement of 3D sounds (#30) */
     s->quick_menu_scale = 0;    /* the quick menu off unless chosen (Gameplay) */
     s->skip_intro = 0;
     s->show_launcher = 1;
@@ -185,6 +195,10 @@ void ngb_settings_load(NgbSettings *s)
             s->all_difficulties = atoi(val) != 0;
         } else if (!strcmp(key, "unlock_all_costumes")) {
             s->all_costumes = atoi(val) != 0;
+        } else if (!strcmp(key, "show_hud")) {
+            s->show_hud = atoi(val) != 0;
+        } else if (!strcmp(key, "positional_audio")) {
+            s->positional_audio = atoi(val) != 0;
         } else if (!strcmp(key, "smoother_glow")) {
             s->smooth_glow = atoi(val) != 0;
         } else if (!strcmp(key, "movie_ratio")) {
@@ -234,6 +248,8 @@ void ngb_settings_save(const NgbSettings *s)
     fprintf(f, "movie_ratio = %s\n", s->movie_43 ? "4:3" : "16:9");
     fprintf(f, "shadow_resolution = %d\n", s->shadow_scale);
     fprintf(f, "smoother_glow = %d\n", s->smooth_glow);
+    fprintf(f, "positional_audio = %d\n", s->positional_audio);
+    fprintf(f, "show_hud = %d\n", s->show_hud);
     fprintf(f, "quick_menu_freeze = %d\n", s->quick_menu_freeze);
     fprintf(f, "quick_menu_scale = %d\n", ngb_quick_scale_value(s->quick_menu_scale));
     fprintf(f, "skip_intro = %d\n", s->skip_intro);

@@ -63,6 +63,13 @@ static uint64_t rd(void *dev, uint32_t off, int size)
      * flip, starving lower-priority threads (CRI's file and movie server).
      * A guest polling the GPU is waiting on hardware: let others run. */
     if (vcpu_self()) {
+        /* A higher-priority thread is waiting for the CPU (the GPU's interrupt, typically): give it
+         * now. On Windows this read runs in an exception handler, where the preemption redirect is
+         * held off -- and under Wine the mark that holds it off is never cleared, so a game polling
+         * GPU registers in a tight loop (the arcade Ninja Gaiden waiting for PGRAPH idle, its reads
+         * alternating so never "the same register again") kept the CPU from the interrupt thread
+         * for good: no frame ever (#18, Proton). The flag is all a pending preemption is. */
+        vcpu_check_preempt();
         /* Not only DMA_GET: D3D's Present also spins on a PGRAPH register
          * (0x400B10) until the GPU catches up. Any register read twice in a
          * row by the same thread is a poll. */

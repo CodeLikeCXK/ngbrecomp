@@ -18,6 +18,7 @@
  */
 
 #include "renderer.h"
+#include "nv2a_vk_share.h"   /* nv2a_vk_set_draws_off */
 
 static void create_buffer(PGRAPHState *pg, StorageBuffer *buffer)
 {
@@ -72,11 +73,34 @@ void pgraph_vk_init_buffers(NV2AState *d)
         .buffer_size = r->storage_buffers[BUFFER_STAGING_DST].buffer_size,
     };
 
+    /* xboxrecomp: a depth-stencil surface being converted, 8 bytes a pixel at its scale. Upstream sizes it
+     * for the largest scale, 10x: 800 MB of device memory, twice -- a 1 GB card ran out before the first
+     * frame (#73). The scale is fixed for the session here: the render resolution's (NV2A_SCALE) for the
+     * screen-sized surfaces, NV2A_SHADOW_SCALE for the small depth-only ones (surface.c), which are under
+     * 640x448. */
+    size_t compute_size;
+    {
+        size_t user = g_config.display.quality.surface_scale > 0 ? (size_t)g_config.display.quality.surface_scale : 1;
+        const char *e = getenv("NV2A_SHADOW_SCALE");
+        size_t shadow = e && atoi(e) > 1 ? (size_t)atoi(e) : 1;
+        if (shadow > 10)
+            shadow = 10;
+        size_t big = (1024 * user) * (1024 * user), small = (640 * shadow) * (448 * shadow);
+        compute_size = (big > small ? big : small) * 8;
+    }
+    /* xboxrecomp: NV2A_NO_DRAWS=1 (src/main.c, when the title's Direct3D renderer draws): this renderer only
+     * runs the pushbuffer, its draws off from the start, and the buffers only drawing uses are made small --
+     * the inline vertices' alone were 1.3 GB of device memory with this port's batch length (#73). */
+    bool no_draws = getenv("NV2A_NO_DRAWS") && *getenv("NV2A_NO_DRAWS") == '1';
+    if (no_draws) {
+        nv2a_vk_set_draws_off(true);
+        compute_size = 1 << 20;
+    }
     r->storage_buffers[BUFFER_COMPUTE_DST] = (StorageBuffer){
         .alloc_info = device_alloc_create_info,
         .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        .buffer_size = (1024 * 10) * (1024 * 10) * 8,
+        .buffer_size = compute_size,
     };
 
     r->storage_buffers[BUFFER_COMPUTE_SRC] = (StorageBuffer){
@@ -90,7 +114,7 @@ void pgraph_vk_init_buffers(NV2AState *d)
         .alloc_info = device_alloc_create_info,
         .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                  VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-        .buffer_size = sizeof(pg->inline_elements) * 100,
+        .buffer_size = no_draws ? 1 << 20 : sizeof(pg->inline_elements) * 100,
     };
 
     r->storage_buffers[BUFFER_INDEX_STAGING] = (StorageBuffer){
@@ -125,7 +149,7 @@ void pgraph_vk_init_buffers(NV2AState *d)
         .alloc_info = device_alloc_create_info,
         .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                  VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-        .buffer_size = NV2A_VERTEXSHADER_ATTRIBUTES * NV2A_MAX_BATCH_LENGTH *
+        .buffer_size = no_draws ? 1 << 20 : NV2A_VERTEXSHADER_ATTRIBUTES * NV2A_MAX_BATCH_LENGTH *
                        4 * sizeof(float) * 10,
     };
 

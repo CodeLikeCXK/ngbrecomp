@@ -287,7 +287,7 @@ static void picture(NgbQuickEntry *e)
     case 0xCC:
     case 0x182:
     case 0x183:
-        art = lv >= 2 ? "yoto2" : "yoto";
+        art = "yoto";                 /* every level: the game's yoto2.spr is its "No Data" picture */
         name = "Kitetsu";
         break;
     case 0xCD:
@@ -478,8 +478,8 @@ static void apply(uint16_t item, int category)
         unsigned cls = MEM8(r + 0xD);
         if (cls < 1 || cls > 3)
             return;
-        /* The inventory handler checks ownership of the weapon and its
-         * required components before passing it to the resource loader. */
+        /* The inventory handler checks ownership of the weapon before
+         * passing it to the resource loader. */
         esi = item;
         if (!call(sub_001542C0))
         {
@@ -496,14 +496,13 @@ static void apply(uint16_t item, int category)
             fprintf(stderr, "[QUICK] refused %04X: %u required parts\n", item, n);
             return;
         }
+        /* A part the game does not count as owned does not stop it: its own Weapon menu equips such a
+         * weapon (the Kitetsu of a chapter 13 save, part 0x0EA; the Spear Gun without spears, 0x099). */
         for (unsigned i = 0; i < n; i++)
         {
             esi = MEM16(scratch + i * 2);
             if (!call(sub_001542C0))
-            {
-                fprintf(stderr, "[QUICK] refused %04X: its part %04X is not owned\n", item, (unsigned)MEM16(scratch + i * 2));
-                return;
-            }
+                fprintf(stderr, "[QUICK] %04X: its part %04X is not owned\n", item, (unsigned)MEM16(scratch + i * 2));
         }
         if (MEM16(0x58A570 + player + (cls - 1) * 2) == item)
         {
@@ -580,6 +579,7 @@ static void dispatch_command(uint16_t item, int category)
         apply(item, category);
     }
 }
+static uint64_t s_closed_since;   /* the gate closed on an open menu, since (SDL ms) */
 static void quick_step(void)
 {
     if (!regular_play()) s_recovery_sound = 0;
@@ -619,8 +619,26 @@ static void quick_step(void)
         pause_menu(0);
         return;
     }
-    int requested = ngb_quick_take_open();
+    /* The game allows no menu while the gate is closed -- an attack finishing, but also states that last:
+     * aiming the bow in first person, its own Start ignored there too. A request waits for the gate (it
+     * lapses after a quarter second, src/quick_ui.c), and a menu the gate stays closed on for a second
+     * closes: open there, it showed the cards with nothing working but Left and Right (#76). */
+    int requested = ready ? ngb_quick_take_open() : 0;
     category = ngb_quick_category();
+    if (category && !ready && !s_pause)
+    {
+        if (!s_closed_since)
+            s_closed_since = SDL_GetTicks64();
+        else if (SDL_GetTicks64() - s_closed_since > 1000)
+        {
+            fprintf(stderr, "[QUICK] closed: the game allows no menu now\n");
+            ngb_quick_close();
+            s_closed_since = 0;
+            return;
+        }
+    }
+    else
+        s_closed_since = 0;
     if (category)
     {
         NgbQuickMenu menu;

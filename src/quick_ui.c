@@ -10,6 +10,7 @@
 #include <string.h>
 
 int ngb_pc_setting(int which);
+void ngb_pc_set_setting(int which, int value);   /* src/ingame_menu.c */
 
 static SDL_SpinLock s_lock;
 static NgbQuickMenu s_menu;
@@ -25,7 +26,10 @@ static unsigned s_mouse;
 static unsigned s_held, s_edges, s_request;
 static int s_confirm_ready;
 static Uint64 s_request_at;
+static int s_request_step;      /* opened by Left / Right: a card that way at once (-1, 1) */
 static uint64_t s_repeat_at;
+/* The card last on in each category, where the menu opens next (0xFFFF none yet) */
+static uint16_t s_remember[NGB_QUICK_CATEGORIES] = { 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF };
 static uint32_t s_repeat;
 static char s_game_dir[4096];
 static char s_message[64];
@@ -96,6 +100,14 @@ void ngb_quick_poll(void)
         int connected = xbox_InputGetStateRaw(p, &pad) == 0;
         bits |= ngb_bind_quick_state(s_keys, s_mouse, connected ? &pad : NULL);
     }
+    {   /* Toggle HUD (Controls; nothing bound by default): each new press flips Display & Audio > HUD */
+        static unsigned hud_held;
+        unsigned hud = bits & NGB_BIND_HUD_BIT;
+        if (hud && !hud_held && !ngb_bind_capturing())
+            ngb_pc_set_setting(24, !ngb_pc_setting(24));
+        hud_held = hud;
+        bits &= ~(unsigned)NGB_BIND_HUD_BIT;
+    }
     SDL_AtomicLock(&s_lock);
     if (!ngb_pc_setting(20))
     {
@@ -114,9 +126,11 @@ void ngb_quick_poll(void)
         if (!(bits & (Q_CONFIRM | Q_CANCEL)))
             s_confirm_ready = 1;
     }
-    else if (!s_block && (edge & (Q_UP | Q_DOWN)))
+    else if (!s_block && (edge & (Q_UP | Q_DOWN | Q_LEFT | Q_RIGHT)))
     {
+        /* Up the melee weapons, Down the items; Left / Right the melee weapons, a card that way */
         s_request = edge & Q_DOWN ? NGB_QUICK_ITEMS : NGB_QUICK_MELEE;
+        s_request_step = edge & (Q_UP | Q_DOWN) ? 0 : edge & Q_LEFT ? -1 : 1;
         s_request_at = SDL_GetTicks64();
     }
     s_held = bits;
@@ -130,6 +144,8 @@ int ngb_quick_take_open(void)
     SDL_AtomicLock(&s_lock);
     unsigned category = SDL_GetTicks64() - s_request_at < 250 ? s_request : 0;
     s_request = 0;
+    if (!category)
+        s_request_step = 0;                        /* a stale Left / Right does not move a later opening */
     SDL_AtomicUnlock(&s_lock);
     return category;
 }
@@ -193,11 +209,27 @@ void ngb_quick_open(const NgbQuickMenu *menu)
     s_revision++;
     s_open = 1;
     s_block = 1;
+    for (int c = 0; c < NGB_QUICK_CATEGORIES; c++) {   /* each category on the card it was left on */
+        NgbQuickView *v = &s_menu.views[c];
+        for (int i = 0; i < v->count; i++)
+            if (v->entries[i].id == s_remember[c])
+                v->index = i;
+    }
+    int step = s_request_step;
+    s_request_step = 0;
+    NgbQuickView *opened = &s_menu.views[s_menu.category - 1];
+    if (step && opened->count > 1) {                  /* opened by Left / Right: that card at once, */
+        opened->index = (opened->index + step + opened->count) % opened->count;
+        s_remember[s_menu.category - 1] = opened->entries[opened->index].id;
+        s_navigation++;                                /* its sound, */
+        s_repeat = step < 0 ? Q_LEFT : Q_RIGHT;        /* and held, on as inside the menu */
+        s_repeat_at = SDL_GetTicks64() + 380;
+    }
     int category = s_menu.category;
     SDL_AtomicUnlock(&s_lock);
     const NgbQuickView *view = &menu->views[category - 1];
-    fprintf(stderr, "[QUICK] menu open category=%d count=%d pause=%d ready=%d\n", view->category,
-            view->count, view->freeze, menu->ready);
+    fprintf(stderr, "[QUICK] menu open category=%d count=%d pause=%d ready=%d%s\n", view->category,
+            view->count, view->freeze, menu->ready, step ? step < 0 ? " (Left: the card before)" : " (Right: the next card)" : "");
 }
 
 void ngb_quick_close(void)
@@ -623,14 +655,19 @@ static void category_arrow(int cx, int cy, int down, unsigned alpha)
     art(down ? source : &up, (float)cx, (float)cy, 20, alpha);
 }
 
-static int category_step(int category, int direction)
+/* The category above or below; wrap 0: held, it stops at the top or the bottom (the same one back) */
+static int category_step(int category, int direction, int wrap)
 {
     /* Visual order is independent of the native inventory class numbers. */
     static const int order[] = {NGB_QUICK_NINPO, NGB_QUICK_PROJECTILES,
                                 NGB_QUICK_MELEE, NGB_QUICK_ITEMS};
     for (int i = 0; i < NGB_QUICK_CATEGORIES; i++)
-        if (order[i] == category)
-            return order[(i + direction + NGB_QUICK_CATEGORIES) % NGB_QUICK_CATEGORIES];
+        if (order[i] == category) {
+            int j = i + direction;
+            if (!wrap && (j < 0 || j >= NGB_QUICK_CATEGORIES))
+                return category;
+            return order[(j + NGB_QUICK_CATEGORIES) % NGB_QUICK_CATEGORIES];
+        }
     return NGB_QUICK_MELEE;
 }
 
@@ -664,9 +701,14 @@ int ngb_quick_layer(uint32_t *pixels)
     }
     if (dir && ((pressed & dir) || (s_repeat == dir && now >= s_repeat_at)))
     {
-        if ((dir == Q_UP || dir == Q_DOWN) && s_menu.ready)
+        /* A press steps a category and goes round; held, Up goes to the melee weapons and Down to the
+         * items -- where each opens the menu -- and stays */
+        int next = (dir == Q_UP || dir == Q_DOWN) && s_menu.ready
+                 ? (pressed & dir) ? category_step(s_menu.category, dir == Q_UP ? -1 : 1, 1)
+                                   : dir == Q_UP ? NGB_QUICK_MELEE : NGB_QUICK_ITEMS : 0;
+        if (next && next != s_menu.category)
         {
-            s_menu.category = category_step(s_menu.category, dir == Q_UP ? -1 : 1);
+            s_menu.category = next;
             view = &s_menu.views[s_menu.category - 1];
             s_navigation++;
             s_revision++;
@@ -675,12 +717,21 @@ int ngb_quick_layer(uint32_t *pixels)
         }
         else if ((dir == Q_LEFT || dir == Q_RIGHT) && view->count > 1)
         {
-            view->index = (view->index + (dir == Q_LEFT ? -1 : 1) + view->count) % view->count;
-            s_navigation++;
-            s_revision++;
-            s_message[0] = 0;
-            fprintf(stderr, "[QUICK] selected category=%d item=%04X\n", view->category,
-                    view->entries[view->index].id);
+            /* A press steps and goes round; held, it steps on to the first or the last card and
+             * stops there, as Up / Down do with the categories */
+            int i = view->index + (dir == Q_LEFT ? -1 : 1);
+            if (pressed & dir)
+                i = (i + view->count) % view->count;
+            if (i >= 0 && i < view->count && i != view->index)
+            {
+                view->index = i;
+                s_remember[view->category - 1] = view->entries[view->index].id;
+                s_navigation++;
+                s_revision++;
+                s_message[0] = 0;
+                fprintf(stderr, "[QUICK] selected category=%d item=%04X\n", view->category,
+                        view->entries[view->index].id);
+            }
         }
         if (s_menu.ready || dir == Q_LEFT || dir == Q_RIGHT)
         {
@@ -713,8 +764,8 @@ int ngb_quick_layer(uint32_t *pixels)
         }
     }
     NgbQuickView v = *view;
-    int above_category = category_step(s_menu.category, -1);
-    int below_category = category_step(s_menu.category, 1);
+    int above_category = category_step(s_menu.category, -1, 1);
+    int below_category = category_step(s_menu.category, 1, 1);
     const NgbQuickView *above = &s_menu.views[above_category - 1];
     const NgbQuickView *below = &s_menu.views[below_category - 1];
     NgbQuickEntry above_entry = {0}, below_entry = {0};

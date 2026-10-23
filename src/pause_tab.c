@@ -77,7 +77,7 @@ void ngb_pc_set_setting(int which, int value);
 /* The settings, numbered as ngb_pc_setting has them. */
 enum { S_RENDER, S_TEXTURE, S_SHADOW, S_DISPLAY, S_VSYNC, S_FPS, S_WINDOW, S_ASPECT,
        S_SKIP, S_LAUNCHER, S_MSAA, S_HEALTH, S_NINPO, S_ESSENCE, S_ALLDIFF, S_SCARABS, S_ALLCOST, S_EXTRACOST,
-       S_GLOW, S_QUICKFREEZE, S_QUICKSCALE, S_INFITEMS, S_INFAMMO, S_COUNT };
+       S_GLOW, S_QUICKFREEZE, S_QUICKSCALE, S_INFITEMS, S_INFAMMO, S_POSAUDIO, S_HUD, S_COUNT };
 
 static const char *const s_label[S_COUNT] = {
     "Render Resolution", "Anisotropic Filtering", "Shadow Resolution",
@@ -85,7 +85,7 @@ static const char *const s_label[S_COUNT] = {
     "Skip Intros", "Settings at Startup", "Anti-Aliasing (MSAA)",
     "Infinite Health", "Infinite Ninpo", "Infinite Essence", "All Difficulties",
     "Golden Scarabs", "All Costumes", "Extra Costume", "Smoother Glow", "Quick Menu Pause",
-    "Quick Menu", "Infinite Items", "Infinite Projectiles",
+    "Quick Menu", "Infinite Items", "Infinite Projectiles", "Positional Audio", "HUD",
 };
 static const char *const s_help[S_COUNT] = {
     "Draws the game at a multiple of the console's resolution.",
@@ -109,22 +109,24 @@ static const char *const s_help[S_COUNT] = {
     "A softer, fainter glow on bright lights. Off: the console's.",
     "The game pauses while the quick menu is open (once Ryu's action ends).",
     "A d-pad menu of weapons, Ninpo and items (Up and Down open it), at this size.",
-    "Elixirs, rations and the Talisman of Rebirth are not used up. For this session only.",
+    "Healing items, the Talisman of Rebirth and the Jewel of the Demon Seal are not used up.\nFor this session only.",
     "Shuriken, smoke bombs, arrows and spears are not used up. For this session only.",
+    "Places sounds left and right, as the console's sound chip does. Off: all sounds centred.",
+    "The health and Ninpo bar, weapons and the rest drawn over play. Off: a clear screen.",
 };
 
 /* The categories: the strip's words, their rows. */
 #define CATS 6
-#define CAT_ROWS 6
+#define CAT_ROWS 7
 #define CAT_CTL 5                 /* Controls: the bindings' list (src/bindings.c), not settings */
 /* Gameplay: optional changes to how the game plays (off unless chosen; docs/quick-menu.md) */
-static const char *const s_cat_name[CATS] = { "Graphics", "Display", "Startup", "Gameplay", "Cheats", "Controls" };
+static const char *const s_cat_name[CATS] = { "Graphics", "Display & Audio", "Startup", "Gameplay", "Cheats", "Controls" };
 static const signed char s_cat_rows[CATS][CAT_ROWS] = {
-    { S_RENDER, S_TEXTURE, S_MSAA, S_SHADOW, S_GLOW },
-    { S_ASPECT, S_WINDOW, S_DISPLAY, S_VSYNC, S_FPS },
+    { S_RENDER, S_TEXTURE, S_MSAA, S_SHADOW, S_GLOW, -1 },   /* -1 ends a page shorter than CAT_ROWS */
+    { S_ASPECT, S_WINDOW, S_DISPLAY, S_VSYNC, S_FPS, S_HUD, S_POSAUDIO },
     { S_SKIP, S_ALLDIFF, S_ALLCOST, -1 },
     { S_QUICKSCALE, S_QUICKFREEZE, -1 },
-    { S_HEALTH, S_NINPO, S_ESSENCE, S_SCARABS, S_INFITEMS, S_INFAMMO },
+    { S_HEALTH, S_NINPO, S_ESSENCE, S_SCARABS, S_INFITEMS, S_INFAMMO, -1 },
     { -1 },
 };
 
@@ -134,8 +136,9 @@ static const signed char s_cat_rows[CATS][CAT_ROWS] = {
  * Default Controls */
 #define CTL_INVX A_COUNT
 #define CTL_START (A_COUNT + 3)
-#define CTL_DEF  (A_COUNT + 4)
-#define CTL_ROWS (A_COUNT + 5)
+#define CTL_MOUSE (A_COUNT + 4)   /* Camera Sensitivity: a value, Left / Right (#67) */
+#define CTL_DEF  (A_COUNT + 5)
+#define CTL_ROWS (A_COUNT + 6)
 #define CTL_TOGGLE(r) ((r) >= CTL_INVX && (r) <= CTL_START)
 static const char *const s_ctl_toggle_name[4] = {
     "Invert Camera X", "Invert Camera Y", "Invert First-Person X", "Start in Third Person",
@@ -448,12 +451,38 @@ static float sample_ink(int t, float x, float y)
     return v;
 }
 
+/* One character of the typeface (coverage into m when m is given); its advance. */
+static float ttf_char(uint8_t *m, int w, int h, const stbtt_fontinfo *f, int cp, float px, float sx,
+                      float x, float base)
+{
+    float scale = stbtt_ScaleForPixelHeight(f, px);
+    int adv, lsb, x1, y1, x2, y2;
+    stbtt_GetCodepointHMetrics(f, cp, &adv, &lsb);
+    stbtt_GetCodepointBitmapBox(f, cp, scale * sx, scale, &x1, &y1, &x2, &y2);
+    int gw = x2 - x1, gh = y2 - y1;
+    static uint8_t g[160 * 160];
+    if (m && gw > 0 && gh > 0 && gw <= 160 && gh <= 160) {
+        stbtt_MakeCodepointBitmap(f, g, gw, gh, gw, scale * sx, scale, cp);
+        for (int yy = 0; yy < gh; yy++)
+            for (int xx = 0; xx < gw; xx++) {
+                int X = (int)floorf(x) + x1 + xx, Y = (int)lroundf(base) + y1 + yy;
+                if (X >= 0 && Y >= 0 && X < w && Y < h && g[yy * gw + xx] > m[Y * w + X])
+                    m[Y * w + X] = g[yy * gw + xx];
+            }
+    }
+    return adv * scale * sx;
+}
+
 static float game_text(uint8_t *m, int w, int h, const char *s, float px, float sx,
                        float x, float base)
 {
     float k = px * 0.66f / s_cap_h, x0 = x;     /* output pixels a texel */
     for (; *s; s++) {
         float c[4];
+        if (*s == '&') {                         /* the game's letters have none (its cell is a quote mark) */
+            x += ttf_char(m, w, h, &s_font_body, '&', px * 0.92f, sx, x, base);
+            continue;
+        }
         int t = glyph((unsigned char)*s, c);
         if (t < 0)
             continue;
@@ -791,6 +820,16 @@ static void draw_controls(uint32_t *px, uint8_t *m, int focused, int row)
                       sel ? 0xFFFFFF : 0xC8C8D0, 1);
             continue;
         }
+        if (r == CTL_MOUSE) {
+            if (sel)
+                page_fill(px, 10, y + 2, 440, ROW_H - 4, 0x6E64DC, 0.85f, 0.05f);
+            page_text_fit(px, m, "Camera Sensitivity", CTL_NAME_X + 6, y + 19, 18,
+                          sel ? 0xF5EB5A : focused ? 0xE6E6EB : 0xA0A0A8, 0, 260);
+            char pct[16];
+            snprintf(pct, sizeof pct, "%s%d%%%s", sel ? "< " : "", ngb_bind_mouse_sensitivity(), sel ? " >" : "");
+            page_text(px, m, pct, s_ctl_cx[2], y + 18, 15, sel ? 0xFFFFFF : 0xC8C8D0, 1);
+            continue;
+        }
         if (r == CTL_DEF) {                            /* Default Controls */
             if (sel)
                 page_fill(px, 10, y + 2, 440, ROW_H - 4, 0x6E64DC, 0.85f, 0.05f);
@@ -803,6 +842,7 @@ static void draw_controls(uint32_t *px, uint8_t *m, int focused, int row)
         for (int c = 0; c < 3; c++) {
             char name[64];
             int fixed = c == 2 && ngb_bind_pad_fixed(r), on = sel && c == s_ctl_col;
+            const char *combo = c == 2 && !ngb_bind_get(r, 2) ? ngb_bind_pad_combo(r) : NULL;   /* the game's own two buttons */
             float cx = s_ctl_cx[c], w = s_ctl_w[c];
             page_fill(px, cx - w / 2, y + 3, w, ROW_H - 6, on ? 0x6E64DC : 0x14141C, on ? 0.9f : 0.55f,
                       on ? 0.9f : 0.55f);
@@ -810,10 +850,12 @@ static void draw_controls(uint32_t *px, uint8_t *m, int focused, int row)
                 snprintf(name, sizeof name, c == 2 ? "Press a button" : "Press a key");
             else if (fixed)
                 snprintf(name, sizeof name, r >= A_CAM_UP ? "R Stick" : "L Stick");
+            else if (combo)
+                snprintf(name, sizeof name, "%s", combo);
             else
                 ngb_bind_input_name(ngb_bind_get(r, c), name, sizeof name);
             page_text_fit(px, m, name, cx, y + 18, 15,
-                          on && capturing ? 0xF5EB5A : on ? 0xFFFFFF : fixed ? 0x6E6E78 : 0xC8C8D0, 1, w - 6);
+                          on && capturing ? 0xF5EB5A : on ? 0xFFFFFF : fixed || combo ? 0x6E6E78 : 0xC8C8D0, 1, w - 6);
         }
     }
     /* how far down the list is: a thin bar at the right */
@@ -827,6 +869,8 @@ static void draw_controls(uint32_t *px, uint8_t *m, int focused, int row)
         help = "Every action as it was.";
     else if (focused && CTL_TOGGLE(row))
         help = s_ctl_toggle_help[row - CTL_INVX];
+    else if (focused && row == CTL_MOUSE)
+        help = "How fast the right stick and the mouse turn the camera (play only).";
     else if (focused && row >= 0)
         help = s_ctl_col == 2 && ngb_bind_pad_fixed(row) ? ngb_bind_help(row)
              : "A: change   X / Delete: clear   (play only; the menus keep theirs)";
@@ -895,7 +939,18 @@ static void draw_page(int focused, int cat, int row)
         }
     }
     if (focused && row >= 0 && row < n)
-        page_text(px, m, s_help[s_cat_rows[cat][row]], 445, ROW_Y0 + CAT_ROWS * ROW_H + 14, 15, 0xFFFFFF, 2);
+        {   /* a help of two lines: split at its \n */
+            const char *h = s_help[s_cat_rows[cat][row]], *nl = strchr(h, '\n');
+            char first[160];
+            if (nl && (size_t)(nl - h) < sizeof first) {
+                memcpy(first, h, (size_t)(nl - h));
+                first[nl - h] = 0;
+                page_text_fit(px, m, first, 445, ROW_Y0 + CAT_ROWS * ROW_H + 28, 15, 0xFFFFFF, 2, 440);
+                page_text_fit(px, m, nl + 1, 445, ROW_Y0 + CAT_ROWS * ROW_H + 46, 15, 0xFFFFFF, 2, 440);
+            } else {
+                page_text_fit(px, m, h, 445, ROW_Y0 + CAT_ROWS * ROW_H + 28, 15, 0xFFFFFF, 2, 440);
+            }
+        }
 
     upload(&s_tex[2], px);
 }
@@ -906,7 +961,7 @@ static void draw_page(int focused, int cat, int row)
 /* While the main menu's RECOMP SETTINGS has the Options menu (src/pc_menu.c)
  * its pictures say so: the header ("OPTIONS", sprite 0x23D) reads SETTINGS
  * and the category words (sprites 0x248-0x24D, slices of one texture) are
- * Graphics, Display and Startup Settings, Gameplay, Cheats and Controls. Each is a texture of
+ * Graphics Settings, Display & Audio, Startup Settings, Gameplay, Cheats and Controls. Each is a texture of
  * ours put in the game's texture's place, the words drawn in the game's
  * pictures' style -- the size, the condensing and the colour of each row of
  * the letters measured from them, the shadow under them -- Liberation Serif
@@ -919,7 +974,7 @@ static uint32_t sprite_def(uint32_t id);
 #define RP_LABEL0 0x248
 #define RP_LABELS 6
 #define RP_WORDS 6
-static const char *const s_rp_word[RP_WORDS] = { "GRAPHICS SETTINGS", "DISPLAY SETTINGS", "STARTUP SETTINGS",
+static const char *const s_rp_word[RP_WORDS] = { "GRAPHICS SETTINGS", "DISPLAY & AUDIO", "STARTUP SETTINGS",
                                                  "GAMEPLAY", "CHEATS", "CONTROLS" };
 
 static struct {
@@ -1645,7 +1700,9 @@ void ngb_menu_mark(void);            /* src/menu_mouse.c */
     if (v_ == (const char *)1) v_ = getenv(name); v_; }))
 
 
-enum { K_UP = 1, K_DOWN, K_LEFT, K_RIGHT, K_OK, K_BACK, K_CLEAR, K_ROW = 0x100 };
+/* K_ROW | the row the mouse is on (HIT_*: up to HIT_CTL + CTL_ROWS * 4, past a byte since the quick menu's
+ * actions -- read back as a byte, the lower rows of Controls were other rows and categories) */
+enum { K_UP = 1, K_DOWN, K_LEFT, K_RIGHT, K_OK, K_BACK, K_CLEAR, K_ROW = 0x10000 };
 
 /* For the mouse (any thread): the row of the page at (x, y) in the menu's
  * 720x480, or -1; *zone -1 on the "<" half of its value, 1 on the ">"
@@ -1712,6 +1769,11 @@ static int ctl_keys(int key, int *row, int strip)
         break;
     case K_LEFT:
     case K_RIGHT: {
+        if (*row == CTL_MOUSE) {
+            ngb_bind_step_mouse_sensitivity(key == K_LEFT ? -1 : 1);
+            play_sound(1);
+            break;
+        }
         int c = s_ctl_col + (key == K_LEFT ? -1 : 1);
         if (c >= 0 && c <= 2 && !(c == 2 && *row < A_COUNT && ngb_bind_pad_fixed(*row))) {
             s_ctl_col = c;
@@ -1722,6 +1784,9 @@ static int ctl_keys(int key, int *row, int strip)
     case K_OK:
         if (CTL_TOGGLE(*row)) {
             ctl_toggle_flip(*row);
+            play_sound(6);
+        } else if (*row == CTL_MOUSE) {
+            ngb_bind_step_mouse_sensitivity(1);
             play_sound(6);
         } else if (*row == CTL_DEF) {
             ngb_bind_defaults();
@@ -1765,7 +1830,7 @@ static void pt_draw(void)
             play_sound(6);
     }
     if (key & K_ROW) {                                /* the mouse on a row or a category */
-        int r = key & 0xFF;
+        int r = key & 0xFFFF;
         if (r >= HIT_CTL && s_cat == CAT_CTL) {      /* a cell of Controls' list */
             ctl_mouse(r, &s_row);
         } else if (r >= HIT_CAT && r < HIT_CAT + CATS) {
@@ -1817,12 +1882,17 @@ static void pt_draw(void)
         play_sound(s_focus ? 6 : 3);                  /* in, as a tab's page; back */
     for (int i = 0; i < S_COUNT; i++)
         vals[i] = ngb_pc_setting(i);
-    int shown = s_cat * 4096 + (s_row + 1) * 64 + s_ctl_col * 16 + (s_cat == CAT_CTL ? s_ctl_top : 0);
+    /* what is drawn, each part in bits of its own (the list's top, past 15 since the quick menu's actions,
+     * ran into the column's: a scroll could leave the page as it was) */
+    int shown = (s_cat & 7) << 28 | ((s_row + 1) & 0xFF) << 20 | (s_ctl_col & 3) << 18 |
+                (s_cat == CAT_CTL ? s_ctl_top & 0x3F : 0) << 12;
     if (s_cat == CAT_CTL)                             /* and the bindings, and waiting for one */
-        shown ^= (int)(ngb_bind_generation() << 20) ^ ngb_bind_capturing() << 30;
+        shown ^= (int)(ngb_bind_generation() & 0x7FF) << 1 ^ ngb_bind_capturing();
     if (s_drawn.page != 0 || s_focus != s_drawn.focused || shown != s_drawn.row ||
         memcmp(vals, s_drawn.vals, sizeof vals)) {
         draw_page(s_focus, s_cat, s_row);
+        if (s_cat == CAT_CTL && getenv("NGB_CTL_LOG"))   /* NGB_CTL_LOG=1: the Controls list as drawn */
+            fprintf(stderr, "[CTL] row %d col %d top %d\n", s_row, s_ctl_col, s_ctl_top);
         s_drawn.page = 0;
         s_drawn.focused = s_focus;
         s_drawn.row = shown;
@@ -1971,8 +2041,8 @@ static int ngb_confirm_tick(void)
     int key = ngb_pause_tab_key(&s_dlg_focus), r = -1;
     s_dlg_back = key == K_BACK;
     if (key & K_ROW) {                                 /* the mouse */
-        if ((key & 0xFF) < 2 && (key & 0xFF) != s_dlg_sel) {
-            s_dlg_sel = key & 0xFF;
+        if ((key & 0xFFFF) < 2 && (key & 0xFFFF) != s_dlg_sel) {
+            s_dlg_sel = key & 0xFFFF;
             play_sound(1);
         }
         key = 0;
@@ -2105,7 +2175,7 @@ void ngb_controls_panel_tick(int want)
             play_sound(6);
     }
     if (key & K_ROW) {
-        int r = key & 0xFF;
+        int r = key & 0xFFFF;
         if (r >= HIT_CTL)
             ctl_mouse(r, &s_ov_row);
         key = 0;
@@ -2122,8 +2192,8 @@ void ngb_controls_panel_tick(int want)
         play_sound(3);
         return;
     }
-    int shown = (s_ov_row + 1) * 64 + s_ctl_col * 16 + s_ctl_top;
-    shown ^= (int)(ngb_bind_generation() << 20) ^ ngb_bind_capturing() << 30;
+    int shown = ((s_ov_row + 1) & 0xFF) << 20 | (s_ctl_col & 3) << 18 | (s_ctl_top & 0x3F) << 12;   /* as the tab's */
+    shown ^= (int)(ngb_bind_generation() & 0x7FF) << 1 ^ ngb_bind_capturing();
     if (shown != s_ov_drawn) {
         ov_draw();
         s_ov_drawn = shown;
@@ -2360,7 +2430,7 @@ static void pt_exit_draw(void)
     int was = s_focus;
     int key = ngb_pause_tab_key(&s_focus);
     if (key & K_ROW) {                                /* the mouse on a row */
-        int r = key & 0xFF;
+        int r = key & 0xFFFF;
         if (r < EXIT_ROWS && r != s_exit_row) {
             s_exit_row = r;
             s_exit_armed = -1;

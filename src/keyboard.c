@@ -22,6 +22,7 @@
  * stick. The pointer is hidden except in the menus with the keyboard and mouse in use. The button prompts become keys (src/pause_tab.c).
  */
 #include <SDL.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -47,13 +48,38 @@ int ngb_skip_button(void)
            st.Gamepad.bAnalogButtons[1] > 0x40;
 }
 
+
+/* The mouse's speed as the camera's stick: from where the game's camera starts to turn (src/bindings.c),
+ * not from 0 -- below that the camera does nothing, and a slow movement of the mouse turned nothing (#67) */
+int ngb_bind_camera_start(void);
+static int mouse_look(int v)
+{
+    if (!v)
+        return 0;
+    int start = ngb_bind_camera_start(), m = v < 0 ? -v : v;
+    m = start + (int)((long)m * (32767 - start) / 32767);
+    return v < 0 ? -m : m;
+}
+
 int xbox_keyboard_map(const Uint8 *k, Uint32 mouse, XBOX_INPUT_STATE *st)
 {
     int menu = ngb_menu_up();
+    {   /* NGB_MENU_UP_LOG=1: when the keys change between the bindings (play) and the menus' layout */
+        static int last = -1;
+        static const char *log = (const char *)1;
+        if (log == (const char *)1) log = getenv("NGB_MENU_UP_LOG");
+        if (log && menu != last) {
+            fprintf(stderr, "[KEYS] %s\n", menu ? "menu layout (a game menu ran)" : "play: the bindings");
+            last = menu;
+        }
+    }
     if (!menu && !getenv("NGB_FIXED_KEYS")) {   /* in play: as bound (src/bindings.c, the Controls page) */
         SHORT mx = 0, my = 0;
-        if (SDL_GetRelativeMouseMode())
+        if (SDL_GetRelativeMouseMode()) {
             xbox_InputMouseStick(900.0f, &mx, &my);
+            mx = (SHORT)mouse_look(mx);
+            my = (SHORT)mouse_look(my);
+        }
         ngb_bind_play_state(k, mouse, st, mx, my);
         return 1;
     }

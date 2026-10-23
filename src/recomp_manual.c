@@ -22,6 +22,7 @@
 #include <string.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "kernel/xbox_memory_layout.h"   /* RECOMP_TLS */
 
 /* ── ICALL trace ring buffer ───────────────────────────────── */
 
@@ -205,10 +206,14 @@ void recomp_icall_not_code_log(uint32_t va)
         if (n != 1)
             return;
     }
-    fprintf(stderr, "[ICALL] target 0x%08X is not code -- skipped %llu time(s) "
-                    "(null or wild function pointer, at call #%llu)\n",
-            va, (unsigned long long)hits[i],
-            (unsigned long long)g_icall_count);
+    {   /* the caller: the call pushed its return address, still on the guest stack */
+        extern RECOMP_TLS uint32_t g_esp;
+        extern ptrdiff_t g_xbox_mem_offset;
+        uint32_t ret = g_esp && g_xbox_mem_offset ? *(uint32_t *)((uintptr_t)g_xbox_mem_offset + g_esp) : 0;
+        fprintf(stderr, "[ICALL] target 0x%08X is not code -- skipped %llu time(s) "
+                        "(null or wild function pointer, at call #%llu, returning to 0x%08X)\n",
+                va, (unsigned long long)hits[i], (unsigned long long)g_icall_count, ret);
+    }
     fflush(stderr);
 }
 

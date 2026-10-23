@@ -481,6 +481,19 @@ int nv2a_window_create(const char *title, int width, int height,
  * the main thread, which owns the window. */
 static int s_win_req, s_win_w, s_win_h, s_win_fs;
 
+int nv2a_window_mode(int *width, int *height)
+{
+    if (!s_window)
+        return -1;
+    Uint32 flags = SDL_GetWindowFlags(s_window);
+    if (flags & SDL_WINDOW_FULLSCREEN)
+        return 1;
+    if (flags & SDL_WINDOW_BORDERLESS)
+        return 2;
+    SDL_GetWindowSize(s_window, width, height);
+    return 0;
+}
+
 void nv2a_window_request(int width, int height, int fullscreen)   /* mode: 0, 1, 2 */
 {
     s_win_w = width;
@@ -1476,6 +1489,12 @@ static void present_locked(PGRAPHState *pg, bool on_pfifo)
         VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
         vkCmdClearColorImage(cmd, s_images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                              &black, 1, &range);
+        /* The picture is blitted over the cleared image: two transfer writes to it, ordered only by a
+         * barrier (the validation layer's WRITE_AFTER_WRITE; a driver may overlap them, the clear landing
+         * over part of the picture). */
+        barrier(cmd, s_images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
     }
 
     nv2a_host_presents++;

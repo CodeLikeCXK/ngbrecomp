@@ -263,6 +263,29 @@ static void kernel_data_init(void)
             }
         } else {
             BRIDGE_MEM32(XBOX_KERNEL_DATA_BASE + KDATA_LAUNCH_DATA_PAGE) = 0;
+            /* RECOMP_LAUNCH_PAGE=<file>: the page a title left for the next image when it launched it
+             * (xbox_LaunchImageHook, below), as the console's reboot hands it over: the launching
+             * title's id, the path and its 3072 bytes of launch data. */
+            const char *lp = getenv("RECOMP_LAUNCH_PAGE");
+            FILE *f = lp && *lp ? fopen(lp, "rb") : NULL;
+            if (f) {
+                uint8_t buf[0x1000];
+                size_t got = fread(buf, 1, sizeof buf, f);
+                uint32_t page = got == sizeof buf ? xbox_HeapAlloc(0x1000, 4096) : 0;
+                fclose(f);
+                if (page) {
+                    memcpy((void *)((uintptr_t)page + g_xbox_mem_offset), buf, sizeof buf);
+                    BRIDGE_MEM32(XBOX_KERNEL_DATA_BASE + KDATA_LAUNCH_DATA_PAGE) = page;
+                    fprintf(stderr, "  Launch data: type %u from title 0x%08X, path '%.64s'\n",
+                            BRIDGE_MEM32(page), BRIDGE_MEM32(page + 4), (const char *)((uintptr_t)page + 8 + g_xbox_mem_offset));
+                }
+                /* Used: a later restart of this program (Return to Main Menu) is not a launch again. */
+#if defined(_WIN32)
+                _putenv_s("RECOMP_LAUNCH_PAGE", "");
+#else
+                unsetenv("RECOMP_LAUNCH_PAGE");
+#endif
+            }
         }
     }
 
@@ -1222,6 +1245,11 @@ static void bridge_ExQueryNonVolatileSetting(void)
     g_eax = (uint32_t)st;
 }
 
+/* The host's way into another image (XLaunchNewImage): the guest path the title asked for and the
+ * launch data page (4096 bytes) it filled in. It does not return when it starts the image; when it
+ * cannot, the title exits as before. NULL: no other images. */
+void (*xbox_LaunchImageHook)(const char *path, const void *page, size_t len);
+
 /* HalReturnToFirmware(Routine) - the title asking to reboot or quit.
  *
  * It never returns on hardware. Returning here would let the game run on past
@@ -1229,6 +1257,19 @@ static void bridge_ExQueryNonVolatileSetting(void)
 static void bridge_HalReturnToFirmware(void)
 {
     uint32_t routine = STACK_ARG(0);
+
+    {   /* A quick reboot into another image: the host starts it (xbox_LaunchImageHook). */
+        uint32_t page = BRIDGE_MEM32(XBOX_KERNEL_DATA_BASE + KDATA_LAUNCH_DATA_PAGE);
+        if (page && xbox_LaunchImageHook) {   /* an empty path too: the host knows what that means for it */
+            char path[521];
+            memcpy(path, (const void *)((uintptr_t)page + 8 + g_xbox_mem_offset), 520);
+            path[520] = 0;
+            fprintf(stderr, "  [KERNEL] HalReturnToFirmware(%u): launching '%s'\n", routine, path);
+            fflush(stderr);
+            xbox_LaunchImageHook(path, (const void *)((uintptr_t)page + g_xbox_mem_offset), 0x1000);
+            fprintf(stderr, "  [KERNEL] could not launch '%s'\n", path);
+        }
+    }
 
     /* Routine 2 is a quick reboot, which on Xbox is how a title hands off to
      * another image: XLaunchNewImage fills the launch data page and reboots.

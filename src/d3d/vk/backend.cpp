@@ -216,6 +216,7 @@ void DecodeBC(Host h, const uint8_t* src, uint32_t w, uint32_t h_, std::vector<u
 constexpr VkDeviceSize kRingSize = 64u << 20;   // vertices, indices and constants of one frame
 constexpr uint32_t kQuadVertices = 6;
 extern "C" int ngb_pc_setting(int which);
+extern "C" int nv2a_dirty_stamp(const void* host, size_t len, uint64_t* stamp);   // xboxrecomp nv2a_dirty.c
 extern "C" float ngb_hud_shape(void);   // src/pc_menu.c: the menus' and HUD's narrowing
 extern "C" int ngb_2d_stretched(void);
 extern "C" [[noreturn]] void ngb_renderer_fatal(const char* detail);  // src/ingame_menu.c  // src/pc_menu.c: the game in its widescreen mode, its 2D as drawn
@@ -362,7 +363,8 @@ private:
 
     Image display_[3];   // copies of the front buffer for the presenter, in turn
     Image quick_layer_;
-    Image quick_background_;
+    Image quick_background_, quick_blur_, quick_full_;   // the quick menu's paused background: small, its blur's
+                                                          // other half, and the frame blitted for it
     VkSampler quick_sampler_ = VK_NULL_HANDLE;
     void QuickMenu(Image& dst);
     void QuickMenuBackground(Image& dst);
@@ -429,7 +431,8 @@ private:
     uint32_t threed_ = 0, threed_prev_ = 0;   // 3D draws into the back buffer, this frame and the one before:
                                               // a screen with them is play (an underwater overlay is no menu)
     VolkDeviceTable d_{};
-    std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t>> sig_memo_;   // texture bytes' signature this frame
+    struct SigMemo { uint64_t frame = 0, sig = 0, stamp = 0; bool stamped = false; };
+    std::unordered_map<uint64_t, SigMemo> sig_memo_;   // texture bytes' signature: this frame's, and its pages' writes
 
     // the title's visibility tests (the sun's lens flare, #35): each draw in one counted by an occlusion query,
     // per frame slot; when the slot's frame is done, the counts summed per test, in console pixels, and
@@ -882,6 +885,9 @@ VulkanBackend::~VulkanBackend() {
     if (dev_) {
         for (auto& image:continuous_glow_) DestroyImage(image);
         for (auto& image:glow_soft_) DestroyImage(image);
+        DestroyImage(quick_background_);
+        DestroyImage(quick_blur_);
+        DestroyImage(quick_full_);
         if (glow_soft_sampler_) d_.vkDestroySampler(dev_,glow_soft_sampler_,nullptr);
     }
 }
@@ -1475,6 +1481,25 @@ void VulkanBackend::BeginRendering(Target* rt, Target* ds) {
     if (ds) Barrier(ds->img, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
     if (rt && rt->samples > 1) Barrier(rt->ms, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     if (ds && ds->samples > 1) Barrier(ds->ms, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+    {   // The pass before, on the same targets in the same layout, got no barrier above (Barrier skips an
+        // unchanged layout), and Vulkan orders attachment writes only within a pass: its depth and colour
+        // writes against this pass's tests and blending need one. RADV keeps passes in order regardless;
+        // AMD's Windows driver does not have to -- Ryu's shadow, drawn in a pass after another on its shadow
+        // map, went missing for a few frames at a time there (#50).
+        VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+        mb.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                          VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        mb.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        mb.dstStageMask = mb.srcStageMask;
+        mb.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                           VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                           VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        di.memoryBarrierCount = 1;
+        di.pMemoryBarriers = &mb;
+        static const bool off = std::getenv("NGB_D3D_NO_PASS_BARRIER") != nullptr;   // to compare
+        if (!off) d_.vkCmdPipelineBarrier2(cmd_, &di);
+    }
     VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     VkRenderingAttachmentInfo da{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
     if (rt) {
@@ -1629,17 +1654,40 @@ VkImageView VulkanBackend::BindTexture(const State& s, int stage, TexInfo& info,
     const uint8_t* guest = static_cast<const uint8_t*>(HostPtr(d.data));
     // its bytes' signature, once a frame: hashed again at every draw that used it, it was a tenth of the
     // game thread's time in busy scenes (#17); a texture rewritten between two draws of one frame is seen
-    // changed from the next frame on
+    // changed from the next frame on. And hashed again only when its pages were written since: every texture
+    // of a frame hashed whole each frame was the game thread's largest cost in busy scenes on older CPUs (#69).
+    // The stamp comes first -- it protects the pages, so a write while hashing changes the next one.
     uint64_t sig;
     {
         uint64_t mk = uint64_t(d.data) << 32 ^ uint64_t(d.format) << 24 ^ uint64_t(d.width) << 12 ^ d.height ^
                       uint64_t(bytes) << 40;
         auto& m = sig_memo_[mk];
-        if (m.first == frame_ + 1) {
-            sig = m.second;
+        if (m.frame == frame_ + 1) {
+            sig = m.sig;
         } else {
-            sig = Hash(guest, bytes, uint64_t(d.format) << 32 | d.width << 16 | d.height);
-            m = {frame_ + 1, sig};
+            uint64_t stamp = 0;
+            bool stamped = nv2a_dirty_stamp(guest, bytes, &stamp) != 0;
+            static const int check = [] { const char* e = std::getenv("NGB_D3D_STAMP_CHECK"); return e ? std::atoi(e) : 0; }();
+            static const bool off = [] { const char* e = std::getenv("NGB_D3D_TEX_STAMP"); return e && *e == '0'; }();
+            if (off || !(stamped && m.stamped && m.stamp == stamp && m.frame)) {
+                m.sig = Hash(guest, bytes, uint64_t(d.format) << 32 | d.width << 16 | d.height);
+            } else if (check) {   // NGB_D3D_STAMP_CHECK=1: a texture the stamp calls unchanged, hashed anyway
+                static unsigned long checked, wrong;
+                uint64_t h = Hash(guest, bytes, uint64_t(d.format) << 32 | d.width << 16 | d.height);
+                checked++;
+                if (h != m.sig) {
+                    wrong++;
+                    std::fprintf(stderr, "[STAMP] changed unseen: %08X %ux%u fmt %02X (%u bytes)\n", d.data, d.width,
+                                 d.height, d.format, bytes);
+                    m.sig = h;
+                }
+                if (checked % 20000 == 0)
+                    std::fprintf(stderr, "[STAMP] %lu reused, %lu changed unseen\n", checked, wrong);
+            }
+            sig = m.sig;
+            m.frame = frame_ + 1;
+            m.stamp = stamp;
+            m.stamped = stamped;
         }
         if (sig_memo_.size() > 65536) sig_memo_.clear();
     }

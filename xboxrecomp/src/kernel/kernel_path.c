@@ -475,6 +475,8 @@ translate:
 #include <unistd.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <dirent.h>
+#include <strings.h>
 #include <sys/types.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -646,6 +648,52 @@ void xbox_path_init(const char* game_dir, const char* save_dir)
              s_game_dir, s_save_dir);
 }
 
+/* The Xbox's file names ignore case, a POSIX file system's do not: a title asking for "media\font.ttf"
+ * on a disc whose folder is "Media" (Ninja Gaiden Black's arcade program, #18). Each component past
+ * base_len that does not exist as spelled is replaced by the entry of its folder that matches it
+ * ignoring case; a path with no such entry (a file about to be created) is left as it was. */
+static void fix_case(char *path, size_t base_len)
+{
+    struct stat st;
+    if (stat(path, &st) == 0)
+        return;
+    char *c = path + base_len;
+    while (*c == '/')
+        c++;
+    while (*c) {
+        char *end = strchr(c, '/');
+        char saved = end ? *end : 0;
+        if (end)
+            *end = 0;
+        if (stat(path, &st) != 0) {
+            char *slash = c - 1;            /* the folder is path up to it */
+            *slash = 0;
+            DIR *d = opendir(*path ? path : "/");
+            *slash = '/';
+            struct dirent *e;
+            int found = 0;
+            while (d && (e = readdir(d))) {
+                if (!strcasecmp(e->d_name, c) && strlen(e->d_name) == strlen(c)) {
+                    memcpy(c, e->d_name, strlen(c));
+                    found = 1;
+                    break;
+                }
+            }
+            if (d)
+                closedir(d);
+            if (!found) {
+                if (end)
+                    *end = saved;
+                return;
+            }
+        }
+        if (!end)
+            return;
+        *end = saved;
+        c = end + 1;
+    }
+}
+
 BOOL xbox_translate_path(const char* xbox_path, xbox_host_char* host_path_buf, DWORD buf_size)
 {
     const char* remainder = NULL;
@@ -716,6 +764,7 @@ translate:
             while (n > 1 && host_path_buf[n - 1] == '/')
                 host_path_buf[--n] = '\0';
         }
+        fix_case(host_path_buf, strlen(base_dir));
 
         XBOX_TRACE(XBOX_LOG_PATH, "%s -> %s", xbox_path, host_path_buf);
         return TRUE;

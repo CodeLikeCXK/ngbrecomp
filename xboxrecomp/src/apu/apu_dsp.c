@@ -93,6 +93,16 @@ static int mcpx_apu_mixdown_all(void)
     return on;
 }
 
+/* The word the EP's program keeps at P:6 while it runs. DirectSound reads it from its APU service
+ * routine, and when the EP is not running (no 0xCCCCCC there) it resets the whole APU, which ends in a
+ * 10 ms KeStallExecutionProcessor. The EP is not run here, so every service found it stopped: the arcade
+ * Ninja Gaiden (NinjaTrilogy.xbe, #18) lost 10 ms of each 16.7 ms frame to the stall and restarted the
+ * audio each time. The GP and EP memories are plain RAM (xbox_memory_layout.c), so this is where the
+ * stand-in for the DSPs says the EP is up. */
+#define APU_EP_RUNNING_VA   0xFE85A018u   /* EP P memory (+0x5A000) word 6 */
+#define APU_EP_RUNNING      0x00CCCCCCu
+extern int xbox_ApuMmioTrapped(void);
+
 void mcpx_apu_dsp_ack_poll(MCPXAPUState *d)
 {
     int i;
@@ -101,6 +111,8 @@ void mcpx_apu_dsp_ack_poll(MCPXAPUState *d)
         dsp_ack_init();
     if (!d->ram_ptr)
         return;
+    if (xbox_ApuMmioTrapped())
+        *(volatile uint32_t *)(d->ram_ptr + APU_EP_RUNNING_VA) = APU_EP_RUNNING;
     for (i = 0; i < s_dsp_ack_count; i++) {
         uint32_t *slot = (uint32_t *)(d->ram_ptr + s_dsp_ack[i]);
         if (*slot) {

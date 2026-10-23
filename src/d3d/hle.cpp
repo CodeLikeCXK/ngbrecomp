@@ -7,6 +7,7 @@
 // NGB_RENDERER=mirror: every call still goes to the recompiled Direct3D (xemu draws and shows the
 // game); this keeps a copy of the state and draws it with the renderer as well, for comparing.
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -193,8 +194,13 @@ void RunPushBuffer(uint32_t pb) {
     if (prim && !idx.empty()) Draw(prim, 0, uint32_t(idx.size()), reinterpret_cast<const uint8_t*>(idx.data()));
 }
 
+// The hooked functions Before does nothing for, found at their first call: those skip g_lock. Taken and
+// dropped some 400,000 times a second, it was a tenth of the game thread's time (#69).
+std::atomic<bool> g_before_idle[D3DF_COUNT];
+
 // before the call: false to let the recompiled body run (always, mirroring)
 bool Before(int fn, Call c) {
+    if (unsigned(fn) < D3DF_COUNT && g_before_idle[fn].load(std::memory_order_relaxed)) return false;
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     switch (fn) {
     // render states
@@ -488,6 +494,7 @@ bool Before(int fn, Call c) {
         g_vis_index = c.r[EAX];
         break;
     default:
+        if (unsigned(fn) < D3DF_COUNT) g_before_idle[fn].store(true, std::memory_order_relaxed);
         break;
     }
     return false;
@@ -495,6 +502,15 @@ bool Before(int fn, Call c) {
 
 // after the recompiled body: what it made
 void After(int fn, Call c) {
+    switch (fn) {   // only these do anything: the rest skip g_lock
+    case D3DF_D3DDevice_CreateVertexShader:
+    case D3DF_D3DDevice_CreatePixelShader:
+    case D3DF_D3DDevice_EndVisibilityTest:
+    case D3DF_D3DDevice_Swap:
+        break;
+    default:
+        return;
+    }
     std::lock_guard<std::recursive_mutex> lock(g_lock);
     switch (fn) {
     case D3DF_D3DDevice_CreateVertexShader: {

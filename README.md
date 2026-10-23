@@ -23,6 +23,8 @@ release** (NTSC-U, title ID `5443000D`) and checks for it.
 - Keyboard and mouse with key prompts in the game, rebindable controls for keyboard, mouse and
   controller, mouse support in the menus
 - Skippable intros and movies, unlock-all options for difficulties and costumes, optional cheats
+- The arcade Ninja Gaiden on the Han's Bar cabinet and the main menu, recompiled as well
+- Positional sound (3D sounds placed left and right as on the console), an optional HUD-free view
 - Smooth frame pacing and low input latency; shaders prepared in the background (no first-time
   stutter)
 
@@ -80,14 +82,18 @@ of the pause menu. Changes apply at once and are saved.
 - **Graphics**: render resolution (1x–10x), texture filtering (the console's, or 2x–16x
   anisotropic), anti-aliasing (MSAA), shadow resolution, Smoother Glow (a softer, fainter glow on
   bright lights; off is the console's look)
-- **Display**: aspect ratio (4:3, 16:9, 16:10, 21:9), window size, windowed / fullscreen /
-  borderless, V-Sync (Off, Mailbox, FIFO, Adaptive), frame-rate counter
+- **Display & Audio**: aspect ratio (4:3, 16:9, 16:10, 21:9), window size, windowed / fullscreen /
+  borderless, V-Sync (Off, Mailbox, FIFO, Adaptive), frame-rate counter, the HUD on or off,
+  Positional Audio (3D sounds placed left and right through the console sound chip's filters, on by
+  default; off, they are centred)
 - **Startup**: skip the warnings and intro movies, all difficulties from the start, all costumes
 - **Gameplay** (each off unless chosen): the Quick Menu, an NG2-style d-pad menu for weapons, Ninpo
   and items, and whether the game pauses while it is open
-- **Cheats** (for the session only): infinite health, ninpo, essence; golden scarabs
+- **Cheats** (for the session only): infinite health, ninpo, essence, items, projectiles; golden scarabs
 - **Controls**: rebind every action (two keys or mouse buttons and a controller button each); camera
-  inversion; start in third person
+  inversion; start in third person; Camera Sensitivity; Toggle HUD (not bound unless chosen). The
+  bindings follow the game's own Button Settings: an action keeps its key or button whatever the
+  game's Options assign
 
 The game's own Options (sound, movie aspect, controller vibration and so on) are where they always
 were.
@@ -112,22 +118,31 @@ right stick (V) to turn the third-person camera instead. With **Start in Third P
 SETTINGS → Controls) the stick turns the third-person camera after every load. **Invert Camera X / Y**
 flips the stick and mouse for the third-person camera, **Invert First-Person X** first-person left and
 right; first-person up and down is the game's own Options → Controller Settings → 1st Person Camera
-Control.
+Control. **Camera Sensitivity** (25%–300%) sets how fast the mouse, the right stick and the camera keys
+turn it; over 100% the camera turns faster than the game's own top speed (the third-person camera's
+left and right; its up and down stays the game's).
 
 With the **Quick Menu** on (RECOMP SETTINGS → Gameplay), Up and Down on the d-pad (or the Up / Down
-arrows, 1 / 2) open it on the melee weapons or the items; Up and Down then change category, Left and
-Right choose, A / Enter equips or uses, B / Escape closes. Its keys are in Controls.
+arrows, 1 / 2) open it on the melee weapons or the items, and Left and Right on the previous or next
+melee weapon; Up and Down then change category, Left and Right choose, A / Enter equips or uses, B /
+Escape closes. Its keys are in Controls.
 
 In the menus the mouse points and clicks, Esc goes back and Q / E switch the pause menu's tabs.
 Movies can be skipped with Start, A or B (or the keys for them); in-game cutscenes with Start.
 
 Other keys: **F10** frame-rate counter, **F11** or **Alt+Enter** fullscreen.
 
+## The arcade Ninja Gaiden
+
+The 1988 arcade Ninja Gaiden is a separate program on the disc (`NinjaTrilogy.xbe`, and
+`NinjaTomoe.xbe` for the Japanese version) that the Xbox switches to. It is recompiled too: the
+packages carry `NinjaTrilogy` and `NinjaTomoe` next to the game, and the game hands over to them from
+the main menu's **ARCADE NINJA GAIDEN** and the cabinet in Han's Bar. In the arcade, Back pauses:
+**B** quits back to Ninja Gaiden Black, **Y** goes to the arcade's title. It opens in the window mode
+the game was in.
+
 ## Known issues
 
-- The **Ninja Gaiden arcade cabinet** in Han's bar does not work: the game closes when you play it
-  (#18). The NES games are a separate program on the disc (`NinjaTrilogy.xbe`) that the Xbox switches
-  to, and only Ninja Gaiden Black itself is recompiled. Save before trying it.
 - At **21:9**, objects at the far left and right of the screen can appear a moment late (the game
   decides what to draw for a narrower view).
 - At **10x render resolution with 8x anti-aliasing**, where the frame rate drops below 60, characters'
@@ -199,7 +214,7 @@ Code:
   audio crackling on Windows (#34)
 - [HammerD72](https://github.com/HammerD72): the audio timing fix (#32); the two spots where the game
   picks the camera view at a load, for Start in Third Person (#23); impact sparks at 21:9 (#65); Smoother
-  Glow (#64)
+  Glow (#64); the Quick Menu (#60)
 - [retro-meister](https://github.com/retro-meister): the macOS port (#49), and the community macOS builds
 
 Testing, saves and traces:

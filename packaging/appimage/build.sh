@@ -51,6 +51,10 @@ rm -rf "$app"
 mkdir -p "$app/usr/bin" "$app/usr/lib"
 cp /out/build/NinjaGaidenBlack /out/build/ngb-setup "$app/usr/bin/"
 llvm-strip "$app/usr/bin/NinjaGaidenBlack" "$app/usr/bin/ngb-setup"
+# The arcade Ninja Gaiden (English and Japanese) the game hands over to (#18).
+for a in NinjaTrilogy NinjaTomoe; do
+    [ -f "/out/build/$a" ] && cp "/out/build/$a" "$app/usr/bin/" && llvm-strip "$app/usr/bin/$a"
+done
 
 # Bundle what a system may lack; never glibc, the Vulkan loader or GPU and
 # window-system libraries, which must be the systems own.
@@ -84,6 +88,7 @@ bundle_deps "$app/usr/bin/ngb-setup"
 for so in $(find "$app/usr/plugins" -name "*.so"); do bundle_deps "$so"; done
 
 patchelf --set-rpath "\$ORIGIN/../lib" "$app/usr/bin/NinjaGaidenBlack" "$app/usr/bin/ngb-setup"
+for a in NinjaTrilogy NinjaTomoe; do [ -f "$app/usr/bin/$a" ] && patchelf --set-rpath "\$ORIGIN/../lib" "$app/usr/bin/$a"; done
 for so in "$app"/usr/lib/*.so*; do patchelf --set-rpath "\$ORIGIN" "$so"; done
 for so in $(find "$app/usr/plugins" -name "*.so"); do patchelf --set-rpath "\$ORIGIN/../../lib" "$so"; done
 echo "Bundled:"; ls "$app/usr/lib"

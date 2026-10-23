@@ -63,7 +63,18 @@ def _merge_flag_states(states):
         if mixed:
             return ("__cmp_mixed_width", list(first[1])) if first[0] == "cmp" else None
         return first
-    return _merge_zero_flag(states)
+    zf = _merge_zero_flag(states)
+    if zf is not None:
+        return zf
+    # Every predecessor keeps CF in _cf (the arithmetic the lifter computes a
+    # carry for, rotates, clc/stc): a jb/jae or setb after the join reads
+    # that, whichever ran. The arcade 68000 cores join `clc; jecxz` (a zero
+    # count) with `ror` on the C flag's setb.
+    from .lifter import CF_TRACKED
+    if all(st[0] in CF_TRACKED or st[0] in ("rol", "ror", "clc", "stc", "cmc", "__cf_in_cf")
+           for st in states):
+        return ("__cf_in_cf", [])
+    return None
 
 
 def _merge_zero_flag(states):
@@ -1232,7 +1243,8 @@ class FunctionTranslator:
         last_setter = None
         for insn in instructions:
             m = insn.mnemonic
-            if m in ("adc", "sbb", "stc", "clc", "cmc", "rcl", "rcr"):
+            if m in ("adc", "sbb", "stc", "clc", "cmc", "rcl", "rcr",
+                     "daa", "das"):
                 return True
             cc = None
             if m.startswith("j") and len(m) > 1:
@@ -1247,7 +1259,7 @@ class FunctionTranslator:
                 cc = "b"
             if (cc in FunctionTranslator._CARRY_CC
                     and (last_setter in CF_TRACKED
-                         or last_setter in ("inc", "dec")
+                         or last_setter in ("inc", "dec", "rol", "ror")
                          or last_setter in BT_MODIFY
                          or last_setter == "rep-compare")):
                 return True
@@ -1376,7 +1388,7 @@ class FunctionTranslator:
             "scasb": {"edi"}, "scasw": {"edi"}, "scasd": {"edi"},
             "cmpsb": {"esi", "edi"}, "cmpsw": {"esi", "edi"},
             "loop": {"ecx"}, "loope": {"ecx"}, "loopne": {"ecx"},
-            "leave": {"esp", "ebp"}, "popad": set(full_registers),
+            "leave": {"esp", "ebp"}, "popad": set(full_registers), "popal": set(full_registers),
             "xlat": {"eax"}, "xlatb": {"eax"},
         }
 
@@ -2155,7 +2167,8 @@ class FunctionTranslator:
         # cmpxchg belongs here too: it snapshots the compare it performed,
         # because eax may be replaced before the branch reads the result.
         if any(insn.mnemonic in ("cmp", "test", "bsf", "bsr", "cmpxchg",
-                                 "lock cmpxchg", "inc", "dec")
+                                 "lock cmpxchg", "inc", "dec", "mul", "imul",
+                                 "daa", "das")
                or insn.mnemonic in _RESULT_SNAPSHOT_SETTERS
                for insn in instructions):
             lines.append("    uint32_t _fa = 0, _fb = 0;")
@@ -2199,6 +2212,12 @@ class FunctionTranslator:
         # corrupts multi-word arithmetic (add/adc pairs) and the shr/adc
         # idiom MSVC emits for odd trailing elements.
         self.lifter.needs_cf = has_carry
+        # daa/das read AF, the carry out of bit 3 of the add/sub before them;
+        # only functions with one pay for computing it.
+        has_af = any(insn.mnemonic in ("daa", "das") for insn in instructions)
+        if has_af:
+            lines.append("    int _af = 0; /* auxiliary carry, for daa/das */")
+        self.lifter.needs_af = has_af
         self.lifter.publishes_ebp = self._func_owns_a_frame(instructions)
 
         # SSE and MMX are architectural state, declared globally by the
@@ -2498,6 +2517,9 @@ class FunctionTranslator:
             "esp": "esp", "sp": "esp",
         }
         for insn in instructions:
+            # PUSHAD/POPAD name no operands but use all eight (lifter.py)
+            if insn.mnemonic in ("pushal", "pushad", "popal", "popad"):
+                regs.update(("eax", "ebx", "ecx", "edx", "esi", "edi", "ebp", "esp"))
             for op in insn.operands:
                 if op.type == "reg" and op.reg in reg_map:
                     regs.add(reg_map[op.reg])

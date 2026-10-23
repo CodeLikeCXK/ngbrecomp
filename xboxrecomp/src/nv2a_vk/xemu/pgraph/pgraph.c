@@ -27,6 +27,7 @@
 #include "util.h"
 #include "swizzle.h"
 #include "nv2a_vsh_emulator.h"
+#include "nv2a_vk_share.h"   /* nv2a_vk_draws_off */
 
 #define PG_GET_MASK(reg, mask) GET_MASK(pgraph_reg_r(pg, reg), mask)
 #define PG_SET_MASK(reg, mask, value)        \
@@ -2794,7 +2795,19 @@ void pgraph_check_within_begin_end_block(PGRAPHState *pg)
     }
 }
 
-DEF_METHOD_NON_INC(NV097, ARRAY_ELEMENT16)
+/* While the Direct3D renderer draws, xemu's draws are off and nothing reads the indices: they were stored one
+ * word at a time anyway, a third of this thread's time in busy scenes (#69). */
+DEF_METHOD_INT(NV097, ARRAY_ELEMENT16);
+DEF_METHOD(NV097, ARRAY_ELEMENT16)
+{
+    if (nv2a_vk_draws_off()) {
+        if (!inc)
+            *num_words_consumed = num_words_available;
+        return;
+    }
+    pgraph_method_non_inc(METHOD_FUNC_NAME_INT(NV097, ARRAY_ELEMENT16), METHOD_HANDLER_ARGS);
+}
+DEF_METHOD_INT(NV097, ARRAY_ELEMENT16)
 {
     pgraph_check_within_begin_end_block(pg);
 
@@ -2807,7 +2820,18 @@ DEF_METHOD_NON_INC(NV097, ARRAY_ELEMENT16)
     pg->inline_elements[pg->inline_elements_length++] = parameter >> 16;
 }
 
-DEF_METHOD_NON_INC(NV097, ARRAY_ELEMENT32)
+/* As ARRAY_ELEMENT16. */
+DEF_METHOD_INT(NV097, ARRAY_ELEMENT32);
+DEF_METHOD(NV097, ARRAY_ELEMENT32)
+{
+    if (nv2a_vk_draws_off()) {
+        if (!inc)
+            *num_words_consumed = num_words_available;
+        return;
+    }
+    pgraph_method_non_inc(METHOD_FUNC_NAME_INT(NV097, ARRAY_ELEMENT32), METHOD_HANDLER_ARGS);
+}
+DEF_METHOD_INT(NV097, ARRAY_ELEMENT32)
 {
     pgraph_check_within_begin_end_block(pg);
 

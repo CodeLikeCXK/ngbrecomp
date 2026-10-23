@@ -27,6 +27,8 @@ typedef struct NgbSettings {
     int all_difficulties;
     int all_costumes;       /* every costume at New Game's Costume Selection */
     int movie_43;           /* the game's Movie Display Ratio 4:3 (kept here: src/pc_menu.c) */
+    int positional_audio;
+    int show_hud;           /* the in-play HUD (src/hud.c, #80) */   /* the APU's HRTF filters: 3D sounds placed left and right (#30), duller */
     int smooth_glow;        /* the glow's continuous filtering (src/d3d/vk/glow_filter.h, #64) */
     /* Hard, Very Hard and Master Ninja offered without clearing the one before */
 } NgbSettings;
@@ -49,7 +51,7 @@ void ngb_settings_row_text(const NgbSettings *s, int item, const char **label,
 const char *ngb_vsync_name(int v);
 int ngb_vsync_step(int v, int dir);
 
-/* Display's quick-menu percentages, 100 down to 0 (Off), in tens. */
+/* The quick menu's size (Gameplay): 25, 50, 75 or 100 percent, or 0 (Off). */
 int ngb_quick_scale_value(int v);
 int ngb_quick_scale_step(int v, int dir);
 

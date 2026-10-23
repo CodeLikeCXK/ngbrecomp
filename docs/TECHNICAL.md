@@ -22,6 +22,16 @@ console is xboxrecomp's runtime:
 - **Audio**: the MCPX APU's voice processor (from xemu) mixing into SDL2's output.
 - **Input**: SDL2 controllers, keyboard and mouse, as the Xbox's USB pad through an OHCI model.
 
+The arcade Ninja Gaiden (#18) is another program on the disc that the Xbox reboots into
+(`XLaunchNewImage`): `NinjaTrilogy.xbe`, or `NinjaTomoe.xbe` (the Japanese build, chosen by the game's
+region flag 0xDB9890). Each is lifted the same way (`tools/pipeline_trilogy.sh [tomoe]`, into
+`src/recomp/gen_trilogy` / `gen_tomoe`) and built as its own program from `src/trilogy/main.c`, drawn by
+the GPU model's own NV2A renderer. `src/launch.c` is the reboot: the runtime hands it the launch data
+page, which it saves and passes on (`RECOMP_LAUNCH_PAGE`), then it starts the other program in place
+of this one -- exec on Linux and macOS, a new process on Windows -- with the window's current mode.
+The arcade is a 68000 emulator written in x86 that keeps the 68000's flags with setcc/daa/das and 16-bit
+mul/imul, which is what made the recompiler's overflow flag, decimal adjust and narrow multiplies matter.
+
 `kill -USR1 <pid>` (Linux) prints the guest thread's host backtrace, every lifted function a named
 `sub_XXXXXXXX`, and its guest registers -- use it instead of gdb, which swallows the TF single-steps
 the APU and AC97 register traps depend on.

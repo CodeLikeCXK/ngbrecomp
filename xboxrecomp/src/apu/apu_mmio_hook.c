@@ -94,8 +94,10 @@ bool apu_hook_handle_mmio(PCONTEXT ctx, uintptr_t fault_addr,
      * what it is waiting for is to see the register traffic that precedes the
      * wait. */
     if (getenv("RECOMP_APU_TRACE")) {
-        static unsigned n;
-        if (n++ < 400) {
+        static unsigned n, limit;
+        if (!limit)
+            limit = atoi(getenv("RECOMP_APU_TRACE")) > 1 ? (unsigned)atoi(getenv("RECOMP_APU_TRACE")) : 400;
+        if (n++ < limit) {
             /* The value as well as the offset: finding which register carries
              * the command-block address means recognising the address when it
              * goes past, and an offset alone never shows it. */

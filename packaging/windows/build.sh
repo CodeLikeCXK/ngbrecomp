@@ -48,13 +48,18 @@ cmake -S "$repo" -B "$out/build" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$repo/cmake/toolchains/windows-x64-llvm-mingw.cmake" \
     -DXBOXRECOMP_DIR="$(cd "${XBOXRECOMP_DIR:-$repo/xboxrecomp}" && pwd)" \
     -DNGB_WIN_DEPS="$deps" -DCMAKE_BUILD_TYPE=Release >"$out/configure.log"
-ninja -C "$out/build" -j"${JOBS:-$(nproc)}" ninja_gaiden_black >"$out/build.log"
+# The arcade Ninja Gaiden (English and Japanese) the game hands over to (#18): built when generated.
+arcade=$(ninja -C "$out/build" -t targets all | grep -oE '^ninja_(trilogy|tomoe):' | tr -d : | tr '\n' ' ')
+ninja -C "$out/build" -j"${JOBS:-$(nproc)}" ninja_gaiden_black $arcade >"$out/build.log"
 
 pkg=$out/NinjaGaidenBlack
 rm -rf "${pkg:?}"
 mkdir -p "$pkg/share/NinjaGaidenBlack/shader-seed" "$pkg/licenses"
 bin=$deps/$llvm_mingw/bin
 "$bin/llvm-strip" -o "$pkg/NinjaGaidenBlack.exe" "$out/build/NinjaGaidenBlack.exe"
+for a in NinjaTrilogy NinjaTomoe; do
+    [ -f "$out/build/$a.exe" ] && "$bin/llvm-strip" -o "$pkg/$a.exe" "$out/build/$a.exe"
+done
 # The DLLs it needs that Windows does not ship: the C++ and thread runtimes from llvm-mingw (the
 # compiler's own), the rest from the sysroot. Not the Vulkan loader: that is the GPU driver's.
 python3 "$here/dlldeps.py" "$bin/llvm-objdump" "$pkg/NinjaGaidenBlack.exe" \

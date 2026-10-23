@@ -33,6 +33,9 @@ bool nv2a_overlay_frame(uint32_t *px, int w, int h, const uint32_t *backdrop);
 /* Settings the overlay can change; they take effect as it closes. aspect as
  * for nv2a_window_create; width/height 0 keep the size. */
 void nv2a_window_request(int width, int height, int fullscreen);
+/* The window as it is now: 0 window, 1 fullscreen, 2 borderless (as nv2a_window_create), and its size
+ * when windowed (left alone otherwise); -1 with no window. */
+int nv2a_window_mode(int *width, int *height);
 void nv2a_present_set_aspect(double aspect);
 /* Where the game's picture is in a window (drawable pixels) ww x wh. */
 void nv2a_present_picture_rect(int ww, int wh, int *x0, int *y0, int *dw, int *dh);

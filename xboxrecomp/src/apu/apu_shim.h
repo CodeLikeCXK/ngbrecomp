@@ -369,7 +369,7 @@ static struct {
 } g_config = {
     .audio = {
         .volume_limit = 1.0f,
-        .hrtf = false,
+        .hrtf = false,  /* xboxrecomp: the 3D voices' placement left and right (#30); mcpx_apu_set_hrtf */
         .vp = { .num_workers = 1 },
     },
 };
